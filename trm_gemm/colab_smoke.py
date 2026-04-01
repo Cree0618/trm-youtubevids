@@ -7,15 +7,18 @@ import torch
 from .backend import TritonGemmBackend
 from .baselines import greedy_search, random_search
 from .data import TraceGenerationConfig, generate_trace_records
+from .env_check import BACKEND_BUILD_ID, print_preflight
 from .model import TinyRecursiveGemmRefiner, rollout_refiner
 from .training import compute_losses
 from .types import GemmTaskSpec, T4
 
 
 def main() -> None:
+    print_preflight(strict_t4=False)
     backend = TritonGemmBackend()
     print(json.dumps(
         {
+            "build_id": BACKEND_BUILD_ID,
             "backend_mode": backend.mode,
             "cuda_available": torch.cuda.is_available(),
             "device_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
@@ -27,12 +30,8 @@ def main() -> None:
     if not torch.cuda.is_available():
         print("WARNING: CUDA is not available. This smoke script is intended for Colab T4.")
 
-    tasks = [
-        GemmTaskSpec(512, 512, 512),
-        GemmTaskSpec(1024, 512, 768),
-        GemmTaskSpec(1536, 1024, 640),
-    ]
-    records = generate_trace_records(tasks, T4, backend, TraceGenerationConfig(seeds_per_task=2, max_steps_per_seed=2))
+    tasks = [GemmTaskSpec(256, 256, 256)]
+    records = generate_trace_records(tasks, T4, backend, TraceGenerationConfig(seeds_per_task=1, max_steps_per_seed=1))
     print(f"generated_trace_records={len(records)}")
 
     model = TinyRecursiveGemmRefiner()
