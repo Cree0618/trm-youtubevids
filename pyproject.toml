@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trm-gemm"
+version = "0.1.0"
+description = "Portable TRM-style GEMM schedule refinement prototype"
+requires-python = ">=3.11"
+dependencies = [
+  "torch",
+]
+
+[tool.setuptools]
+packages = ["trm_gemm"]

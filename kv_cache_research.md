@@ -35,6 +35,10 @@ The memory cost intuition is straightforward:
 
 That is why long context can become memory-bound even when weights already fit comfortably into GPU memory.
 
+### Intuition
+
+KV cache is best understood as a way to avoid recomputing the same historical attention state over and over. Once an earlier token has already produced its keys and values, later decode steps do not need to rebuild them; they only need to look them up, score them against the new query, and append one more entry for the newly generated token.
+
 ## Transformer and Attention Foundation
 
 The transformer foundation comes from *Attention Is All You Need* (Vaswani et al., 2017), which introduced scaled dot-product attention as the core primitive of the architecture. Paper: [Attention Is All You Need](https://arxiv.org/abs/1706.03762).
@@ -62,6 +66,10 @@ Plain-English summary:
 
 This is also why KV cache is tightly tied to self-attention implementation, not to the model in the abstract.
 
+### Intuition
+
+The current token behaves like a reader consulting a growing notebook of previous tokens. Queries are the lookup pattern, keys are the index, and values are the content retrieved after the match. KV cache works because the notebook for past tokens does not need to be rewritten at every decode step.
+
 ## Implementation Intuition
 
 The simplest way to think about KV cache implementation is:
@@ -73,7 +81,7 @@ The simplest way to think about KV cache implementation is:
 
 ### Request-local KV cache
 
-The baseline case is request-local caching: one request builds its own cache, uses it during decoding, and discards it when the request completes. Every LLM inference engine does some form of this by default.
+The baseline case is request-local caching: one request builds its own cache, uses it during decoding, and discards it when the request completes. In mainstream autoregressive LLM inference systems, some form of per-request KV reuse is the standard operational pattern because decode would otherwise repeatedly recompute historical attention state.
 
 ### Sequence-major storage intuition
 
@@ -122,6 +130,10 @@ These two ideas are related but distinct:
 
 The second is no longer just a transformer implementation detail; it becomes a systems and scheduling problem.
 
+### Intuition
+
+At small scale, KV cache looks like a per-request tensor buffer. At serving scale, it behaves more like an allocated, shared, moved, evicted, and sometimes reused memory object. That shift in perspective is the bridge between transformer mechanics and serving systems research.
+
 ## Major Research Themes
 
 ## PagedAttention / memory management
@@ -138,6 +150,9 @@ It turned KV cache from an implementation nuisance into a memory-management abst
 What remained hard:
 Paged cache management solves fragmentation and allocation efficiency, but it does not by itself solve prefix reuse policy, long-context transfer costs, or disaggregated serving.
 
+Intuition:
+The easiest mental model is virtual memory for attention state. A request sees one logical sequence, but the underlying KV blocks do not need to sit next to each other physically in GPU memory.
+
 ## Prefix caching / cache reuse
 
 Problem:
@@ -151,6 +166,9 @@ It improves time-to-first-token and throughput for repeated-prefix workloads wit
 
 What remained hard:
 Prefix reuse only helps when prefixes match; it introduces routing and eviction problems and does not reduce decode cost directly.
+
+Intuition:
+If many requests begin with the same long system prompt or document prefix, recomputing that shared prefix is wasteful. Prefix caching tries to pay that prefill cost once and amortize it across future requests.
 
 ## Chunked prefill and scheduling
 
@@ -166,6 +184,9 @@ It reframed “prefill vs decode” as a scheduler problem, not just a batching 
 What remained hard:
 Chunk sizing, scheduling policy, and tail latency control remain workload-dependent and can interact poorly with other optimizations.
 
+Intuition:
+Large prefills can monopolize the accelerator and make decode users wait. Chunking breaks one large burst of prompt work into smaller pieces so decode can keep making forward progress between them.
+
 ## Offload / hierarchical memory
 
 Problem:
@@ -179,6 +200,9 @@ It extends feasible context length and effective cache capacity beyond GPU memor
 
 What remained hard:
 The cost of bringing data back is real; offload is a capacity optimization, not a free latency optimization.
+
+Intuition:
+Not every part of the cache needs to live in the fastest memory tier all the time. The core question is which KV blocks are hot enough to deserve HBM and which can tolerate slower storage.
 
 ## Quantized KV cache
 
@@ -194,6 +218,9 @@ It directly targets one of the fastest-growing memory consumers in long-context 
 What remained hard:
 Errors can accumulate because cached values are reused over many future decode steps. KV cache is more sensitive than plain weight compression.
 
+Intuition:
+KV cache quantization trades representation fidelity for capacity. The goal is not just to make tensors smaller, but to shrink the part of the runtime state that keeps growing with context length.
+
 ## Disaggregated serving / KV transfer
 
 Problem:
@@ -207,6 +234,9 @@ It allows prefill and decode to be optimized independently for TTFT and inter-to
 
 What remained hard:
 KV transfer itself becomes a performance bottleneck, especially at long context; the system now depends on the quality of cache movement and placement.
+
+Intuition:
+Once prefill and decode are separated, KV cache stops being purely local state and starts behaving like payload. The system wins only if transferring that payload is cheaper than letting the two phases interfere on the same worker.
 
 ## Key Papers
 
@@ -263,7 +293,7 @@ It does not eliminate the underlying memory cost of KV cache; it manages when an
 
 ## Splitwise: Efficient Generative LLM Inference Using Phase Splitting
 
-- Year: 2023 preprint / 2024 publication
+- Year: 2023 preprint
 - Link: [https://arxiv.org/abs/2311.18677](https://arxiv.org/abs/2311.18677)
 
 Summary:
@@ -344,7 +374,7 @@ Why it mattered:
 It made KV-cache quantization a standalone research topic rather than a footnote under general model quantization.
 
 What it did not solve:
-Its methods are more specialized than the simpler FP8-based approaches that are easier to integrate into general-purpose public runtimes today.
+The paper does not by itself establish that its approach is the easiest path for general-purpose runtime integration; in current public tooling, simpler FP8 KV-cache support appears more visibly productized, but that is an implementation trend rather than a claim made by the paper.
 
 ## KVQuant: Towards 10 Million Context Length LLM Inference with KV Cache Quantization
 
@@ -417,7 +447,7 @@ Relevant official docs:
   - [https://docs.vllm.ai/usage/disagg_prefill.html](https://docs.vllm.ai/usage/disagg_prefill.html)
 
 Inference:
-It is reasonable to say that public tooling has standardized around block/paged KV cache management and has meaningful support for prefix reuse and FP8 KV-cache quantization. It would be too strong to say that highly elaborate disaggregated cache hierarchies like Mooncake are “standard” in public open-source usage, even if the ideas are influential.
+It is reasonable to say that block/paged KV cache management, prefix reuse, and FP8 KV-cache support are clearly visible in major public tooling such as vLLM. It would be too strong, based on the sources cited here, to claim universal standardization across the broader open-source ecosystem. It would also be too strong to say that highly elaborate disaggregated cache hierarchies like Mooncake are standard in public open-source usage, even if the ideas are influential.
 
 ### Implementation details visible in public docs
 
