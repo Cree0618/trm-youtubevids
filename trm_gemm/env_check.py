@@ -13,7 +13,7 @@ from .schedules import default_schedule
 from .types import GemmTaskSpec, T4
 
 
-BACKEND_BUILD_ID = "triton-real-gemm-v1"
+BACKEND_BUILD_ID = "triton-real-gemm-v2"
 
 
 def collect_runtime_info() -> dict:
@@ -60,9 +60,13 @@ def run_preflight(strict_t4: bool = True) -> dict:
             errors.append("Sanity GEMM runtime_us is not positive.")
         if sanity_feedback["normalized_tflops"] <= 0:
             errors.append("Sanity GEMM normalized_tflops is not positive.")
-        if sanity_feedback["normalized_tflops"] < 0.01:
-            warnings.append(
-                "Sanity GEMM throughput is suspiciously low; this often indicates a stale installed package or incorrect backend code path."
+        expected_tflops = (2.0 * task.m * task.n * task.k) / (sanity_feedback["runtime_us"] * 1e-6) * 1e-12
+        ratio = sanity_feedback["normalized_tflops"] / max(expected_tflops, 1e-12)
+        if ratio < 0.1 or ratio > 10.0:
+            errors.append(
+                "Sanity GEMM throughput is inconsistent with runtime_us. "
+                f"Expected about {expected_tflops:.6f} TFLOP/s from runtime, got {sanity_feedback['normalized_tflops']:.6f}. "
+                "This usually means a stale installed package or a benchmark unit bug."
             )
 
     result = {
