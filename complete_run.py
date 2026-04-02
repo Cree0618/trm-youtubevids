@@ -80,8 +80,10 @@ def step2_verify():
     print("STEP 2: Verifying CompilerGym works")
     print("=" * 60)
     
-    test_code = '''
-import compiler_gym
+    # Write test to temp file to avoid shell escaping issues
+    test_file = "/tmp/test_compiler_gym.py"
+    with open(test_file, "w") as f:
+        f.write('''import compiler_gym
 env = compiler_gym.make("llvm-v0", benchmark="cbench-v1/qsort",
     observation_space="Autophase", reward_space="IrInstructionCountOz")
 obs = env.reset()
@@ -94,8 +96,9 @@ for i in range(3):
     print(f"  Step {i}: inst={inst} reward={reward:.2f} done={done}")
 env.close()
 print("CompilerGym OK!")
-'''
-    result = run(f'{VENV_PYTHON} -c "{test_code}"', check=False)
+''')
+    
+    result = run(f"{VENV_PYTHON} {test_file}", check=False)
     if result.returncode != 0:
         print(f"ERROR: {result.stderr}")
         sys.exit(1)
