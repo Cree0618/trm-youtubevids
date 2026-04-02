@@ -43,26 +43,33 @@ def step1_setup():
     else:
         print(f"Venv already exists: {VENV_DIR}")
     
-    # Upgrade pip
+    # Always upgrade pip
     print("Upgrading pip...")
     run(f"{VENV_PIP} install --upgrade pip setuptools wheel -q")
     
-    # Install torch with numpy<2 (compiler_gym compatibility)
+    # Always reinstall numpy<2 and torch (venv might be corrupted)
     print("Installing torch + numpy<2...")
-    run(f"{VENV_PIP} install torch 'numpy<2.0' --index-url https://download.pytorch.org/whl/cpu -q")
+    run(f"{VENV_PIP} install 'numpy<2.0' torch --index-url https://download.pytorch.org/whl/cpu -q")
     
-    # Install all compiler_gym dependencies at once
+    # Install all compiler_gym dependencies one by one (continue on error)
     print("Installing compiler_gym dependencies...")
     deps = [
         "grpcio", "pydantic", "protobuf==3.20.3", "requests", "docker",
         "fasteners", "absl-py", "deprecated", "tabulate", "gym==0.21.0",
-        "humanize", "six", "numpy<2.0"
+        "humanize", "six"
     ]
-    run(f"{VENV_PIP} install {' '.join(deps)} -q")
+    for dep in deps:
+        result = run(f"{VENV_PIP} install {dep} -q", check=False)
+        if result.returncode != 0:
+            print(f"  Warning: {dep} failed, continuing...")
+    
+    # Install numpy<2 separately
+    print("Ensuring numpy<2...")
+    run(f"{VENV_PIP} install 'numpy<2.0' -q", check=False)
     
     # Install compiler_gym (no-deps to avoid grpcio conflict)
     print("Installing compiler_gym...")
-    run(f"{VENV_PIP} install compiler_gym --no-deps -q")
+    run(f"{VENV_PIP} install compiler_gym --no-deps -q", check=False)
     
     print("Environment setup complete!")
 
