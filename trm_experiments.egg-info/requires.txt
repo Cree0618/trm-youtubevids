@@ -1,0 +1,8 @@
+torch
+numpy
+
+[all]
+compiler_gym
+
+[compiler]
+compiler_gym

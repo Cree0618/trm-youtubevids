@@ -1,0 +1,11 @@
+Metadata-Version: 2.4
+Name: trm-experiments
+Version: 0.1.0
+Summary: TRM-style tiny recursive reasoning networks for compiler and kernel optimization
+Requires-Python: >=3.11
+Requires-Dist: torch
+Requires-Dist: numpy
+Provides-Extra: compiler
+Requires-Dist: compiler_gym; extra == "compiler"
+Provides-Extra: all
+Requires-Dist: compiler_gym; extra == "all"

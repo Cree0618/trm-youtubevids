@@ -31,6 +31,14 @@ from .eval_real_llvm import (
     trm_selector,
 )
 
+try:
+    from .real_llvm_env import RealLLVMEnv, AVAILABLE_BENCHMARKS
+    HAS_REAL_LLVM = True
+except ImportError:
+    HAS_REAL_LLVM = False
+    RealLLVMEnv = None
+    AVAILABLE_BENCHMARKS = []
+
 __all__ = [
     "BenchmarkSpec",
     "CompilerFeedback",
@@ -60,4 +68,7 @@ __all__ = [
     "print_results_table",
     "random_selector",
     "trm_selector",
+    "RealLLVMEnv",
+    "AVAILABLE_BENCHMARKS",
+    "HAS_REAL_LLVM",
 ]
