@@ -36,6 +36,13 @@ def step1_setup():
     print("STEP 1: Setting up Python 3.11 venv with all dependencies")
     print("=" * 60)
     
+    # Install Python 3.11 if not available
+    print("Checking for Python 3.11...")
+    result = run("which python3.11", check=False)
+    if result.returncode != 0:
+        print("Installing Python 3.11...")
+        run("apt-get update -qq && apt-get install -qq -y python3.11 python3.11-venv python3.11-dev", check=False)
+    
     # Create venv if needed
     if not os.path.exists(VENV_DIR):
         print("Creating venv with Python 3.11...")
