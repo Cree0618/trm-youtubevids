@@ -13,8 +13,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+env = ["gymnasium>=1.0"]
 compiler = ["compiler_gym"]
-all = ["compiler_gym"]
+all = ["gymnasium>=1.0", "compiler_gym"]
 
 [tool.setuptools]
 packages = ["trm_gemm", "trm_compiler"]

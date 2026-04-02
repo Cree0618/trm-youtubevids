@@ -4,6 +4,10 @@ Tiny Recursive Model (TRM) implementations for finding fast kernels and optimal 
 
 **Paper:** "Less is More: Recursive Reasoning with Tiny Networks" — [arXiv:2510.04871](https://arxiv.org/abs/2510.04871)
 
+This repository does not require the legacy `gym` package. If you need a
+maintained Gym-style environment API for extensions or wrappers, use
+`gymnasium`, which is the actively maintained successor to OpenAI Gym.
+
 ---
 
 ## Projects
@@ -58,6 +62,15 @@ pytest -q
 pip install compiler_gym
 python -m trm_compiler.example --compilergym --epochs 20
 ```
+
+### Gym-style API compatibility
+
+```bash
+pip install "trm-experiments[env]"
+```
+
+Use this only if you want to build Gym-style wrappers around the project
+environments. The maintained dependency is `gymnasium`, not `gym`.
 
 ---
 
