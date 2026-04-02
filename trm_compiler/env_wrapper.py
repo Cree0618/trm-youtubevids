@@ -2,8 +2,7 @@
 
 On Linux with compiler_gym installed, uses real LLVM. On Windows or without
 compiler_gym, uses a realistic synthetic environment that models real pass
-ordering dependencies (instcombine→gvn synergy, unroll→vectorize, etc.)
-so TRM can learn transferable patterns.
+ordering dependencies so TRM can learn transferable patterns.
 """
 from __future__ import annotations
 import math
@@ -71,59 +70,91 @@ def pass_id_to_name(pass_id: int) -> str:
 
 
 # ──────────────────────────────────────────────────────────────
+# CompilerGym action name mapping
+# ──────────────────────────────────────────────────────────────
+
+# CompilerGym uses flag-style names like "-mem2reg", "-loop-unroll"
+# Some have parameters. This maps our pass names to CompilerGym flags.
+COMPILERGYM_FLAG_MAP = {
+    "mem2reg": "-mem2reg",
+    "simplifycfg": "-simplifycfg",
+    "early-cse": "-early-cse",
+    "instcombine": "-instcombine",
+    "reassociate": "-reassociate",
+    "gvn": "-gvn",
+    "newgvn": "-newgvn",
+    "sccp": "-sccp",
+    "dce": "-dce",
+    "adce": "-adce",
+    "licm": "-licm",
+    "loop-rotate": "-loop-rotate",
+    "indvars": "-indvars",
+    "loop-unswitch": "-loop-unswitch",
+    "loop-deletion": "-loop-deletion",
+    "loop-idiom": "-loop-idiom",
+    "loop-unroll": "-loop-unroll",
+    "loop-vectorize": "-loop-vectorize",
+    "slp-vectorize": "-slp-vectorize",
+    "inline": "-inline",
+    "argpromotion": "-argpromotion",
+    "deadargelim": "-deadargelim",
+    "globalopt": "-globalopt",
+    "globaldce": "-globaldce",
+    "ipconstprop": "-ipconstprop",
+    "ipsccp": "-ipsccp",
+    "prune-eh": "-prune-eh",
+    "strip-dead-prototypes": "-strip-dead-prototypes",
+    "constmerge": "-constmerge",
+    "sink": "-sink",
+    "sroa": "-sroa",
+    "tailcallelim": "-tailcallelim",
+    "correlated-propagation": "-correlated-propagation",
+    "speculative-execution": "-speculative-execution",
+    "jump-threading": "-jump-threading",
+    "simplifycfg-2": "-simplifycfg",
+    "instcombine-2": "-instcombine",
+}
+
+
+# ──────────────────────────────────────────────────────────────
 # Realistic synthetic compiler environment
 # ──────────────────────────────────────────────────────────────
 
 # Pass synergy pairs: (predecessor, successor) → bonus multiplier
-# These model real compiler ordering effects
 _PASS_SYNERGIES = {
-    # instcombine simplifies, enabling gvn to find more redundancy
     ("instcombine", "gvn"): 1.4,
     ("instcombine", "newgvn"): 1.3,
-    # simplifycfg + instcombine is a classic combo
     ("simplifycfg", "instcombine"): 1.3,
     ("instcombine", "simplifycfg"): 1.2,
-    # loop-unroll creates vectorization opportunities
     ("loop-unroll", "loop-vectorize"): 1.5,
     ("loop-unroll", "slp-vectorize"): 1.3,
-    # loop-rotate enables other loop passes
     ("loop-rotate", "loop-unroll"): 1.3,
     ("loop-rotate", "licm"): 1.4,
     ("loop-rotate", "loop-vectorize"): 1.3,
-    # mem2reg exposes more optimization opportunities
     ("mem2reg", "instcombine"): 1.3,
     ("mem2reg", "sroa"): 1.3,
     ("mem2reg", "gvn"): 1.2,
-    # reassociate helps later passes
     ("reassociate", "instcombine"): 1.3,
     ("reassociate", "gvn"): 1.2,
-    # gvn enables downstream optimizations
     ("gvn", "dce"): 1.3,
     ("gvn", "adce"): 1.2,
     ("gvn", "licm"): 1.2,
-    # inline exposes call-site opportunities
     ("inline", "instcombine"): 1.4,
     ("inline", "gvn"): 1.3,
     ("inline", "sroa"): 1.3,
-    # early-cse before late passes
     ("early-cse", "instcombine"): 1.2,
     ("early-cse", "gvn"): 1.2,
-    # indvars helps vectorize
     ("indvars", "loop-vectorize"): 1.3,
     ("indvars", "loop-unroll"): 1.2,
 }
 
-# Anti-patterns: (predecessor, successor) → penalty multiplier
 _ANTI_PATTERNS = {
-    # Running aggressive passes before their prerequisites
     ("loop-vectorize", "loop-rotate"): 0.8,
     ("loop-unroll", "loop-rotate"): 0.7,
     ("gvn", "mem2reg"): 0.9,
     ("dce", "instcombine"): 0.9,
 }
 
-# Pass base effectiveness ranges: (min_pct, max_pct) reduction
-# Based on typical LLVM pass behavior
 _PASS_EFFECTIVENESS = {
     "mem2reg":            (0.02, 0.15),
     "simplifycfg":        (0.01, 0.10),
@@ -164,9 +195,7 @@ _PASS_EFFECTIVENESS = {
     "instcombine-2":      (0.00, 0.08),
 }
 
-# Benchmark-specific profiles — different programs have different optimization potential
 _BENCHMARK_PROFILES = {
-    # (has_loops, has_recursion, has_heavy_math, complexity, base_inst_count)
     "qsort":     (True,  True,  False, 0.4, 800),
     "adpcm":     (True,  False, True,  0.6, 1500),
     "blowfish":  (True,  False, False, 0.5, 1200),
@@ -189,31 +218,21 @@ _BENCHMARK_PROFILES = {
 
 
 class SyntheticCompilerEnv:
-    """Realistic synthetic compiler environment.
-
-    Models real LLVM pass ordering behavior:
-    - Pass synergies (instcombine → gvn is better than gvn → instcombine)
-    - Anti-patterns (some orderings are actively harmful)
-    - Diminishing returns (running same pass twice)
-    - Benchmark-specific behavior (math-heavy vs. control-flow-heavy)
-    """
+    """Realistic synthetic compiler environment."""
 
     def __init__(self, benchmark_id: str = "qsort", seed: int = 42):
         self.benchmark_id = benchmark_id
         self._rng = np.random.RandomState(seed)
         self._observation_dim = 56
 
-        # Get benchmark profile
         if benchmark_id in _BENCHMARK_PROFILES:
             profile = _BENCHMARK_PROFILES[benchmark_id]
         else:
-            # Default profile
             profile = (True, False, False, 0.5, 1000)
 
         self._has_loops, self._has_recursion, self._has_heavy_math, \
             self._complexity, self._base_inst = profile
 
-        # State
         self._current_inst = self._base_inst
         self._initial_inst = self._base_inst
         self._applied_passes: list[int] = []
@@ -240,14 +259,10 @@ class SyntheticCompilerEnv:
         pass_name = pass_id_to_name(pass_id)
         prev_inst = self._current_inst
 
-        # Compute effectiveness of this pass in current context
         effectiveness = self._compute_effectiveness(pass_id, pass_name)
-
-        # Apply the reduction
         reduction = int(self._current_inst * effectiveness)
         self._current_inst = max(self._current_inst - reduction, 1)
 
-        # Compute reward (log-ratio for scale invariance)
         if prev_inst > 0 and self._current_inst > 0:
             log_reward = math.log(prev_inst / max(self._current_inst, 1))
         else:
@@ -258,18 +273,15 @@ class SyntheticCompilerEnv:
         self._cumulative_reward += log_reward
         self._step += 1
 
-        # Halt conditions
         if self._step >= 40:
             self._done = True
         if log_reward < -1.0:
             self._done = True
-        # Random halt with low probability after 20 steps
         if self._step > 20 and self._rng.rand() < 0.05:
             self._done = True
 
         self._obs = self._generate_observation()
 
-        # Rich feedback with all context
         feedback = CompilerFeedback(
             instruction_count=self._current_inst,
             prev_instruction_count=prev_inst,
@@ -295,132 +307,101 @@ class SyntheticCompilerEnv:
         return self._obs.copy(), feedback, self._done, info
 
     def _compute_effectiveness(self, pass_id: int, pass_name: str) -> float:
-        """Compute pass effectiveness based on context."""
         min_pct, max_pct = _PASS_EFFECTIVENESS.get(pass_name, (0.0, 0.05))
-
-        # Base effectiveness
         effectiveness = self._rng.uniform(min_pct, max_pct)
 
-        # Benchmark profile adjustments
         if not self._has_loops and pass_name.startswith("loop-"):
-            effectiveness *= 0.1  # loop passes useless without loops
+            effectiveness *= 0.1
         if not self._has_heavy_math and pass_name in ("reassociate", "simplifycfg-2"):
             effectiveness *= 0.3
         if not self._has_recursion and pass_name == "tailcallelim":
             effectiveness *= 0.1
 
-        # Complexity scaling
         effectiveness *= (0.5 + self._complexity)
 
-        # Synergy check: does this pass benefit from a recent predecessor?
         if self._applied_passes:
             last_pass = pass_id_to_name(self._applied_passes[-1])
             key = (last_pass, pass_name)
             if key in _PASS_SYNERGIES:
                 effectiveness *= _PASS_SYNERGIES[key]
-
-            # Check last 3 passes for synergies
             for prev_pass_id in self._applied_passes[-3:]:
                 prev_name = pass_id_to_name(prev_pass_id)
                 key2 = (prev_name, pass_name)
                 if key2 in _PASS_SYNERGIES:
                     effectiveness *= (0.5 + 0.5 * _PASS_SYNERGIES[key2])
 
-        # Anti-pattern check
         if self._applied_passes:
             last_pass = pass_id_to_name(self._applied_passes[-1])
             anti_key = (last_pass, pass_name)
             if anti_key in _ANTI_PATTERNS:
                 effectiveness *= _ANTI_PATTERNS[anti_key]
 
-        # Diminishing returns: running same pass again
         times_applied = self._applied_passes.count(pass_id)
         if times_applied > 0:
-            effectiveness *= (0.5 ** times_applied)  # exponential decay
+            effectiveness *= (0.5 ** times_applied)
 
         return effectiveness
 
     def _generate_observation(self) -> np.ndarray:
-        """Generate Autophase-like 56-dim observation."""
         obs = np.zeros(self._observation_dim, dtype=np.float32)
-
-        # Features derived from benchmark profile and current state
-        # These mimic real Autophase features
         inst_ratio = self._current_inst / max(self._initial_inst, 1)
 
-        # Basic block features (indices 0-5)
-        obs[0] = self._has_loops * 10.0 + self._complexity * 5.0  # BBCount
-        obs[1] = 5.0 * self._complexity  # OnePredCount
-        obs[2] = 3.0 * self._complexity  # TwoPredCount
-        obs[3] = obs[0] - obs[1] - obs[2]  # OverTwoPreds
-
-        # Branch features (indices 4-7)
-        obs[4] = 4.0 * self._complexity  # CondBranchInsts
-        obs[5] = 1.0  # UnconditionalBranches
-        obs[6] = obs[4] + obs[5]  # BranchCount
+        obs[0] = self._has_loops * 10.0 + self._complexity * 5.0
+        obs[1] = 5.0 * self._complexity
+        obs[2] = 3.0 * self._complexity
+        obs[3] = obs[0] - obs[1] - obs[2]
+        obs[4] = 4.0 * self._complexity
+        obs[5] = 1.0
+        obs[6] = obs[4] + obs[5]
         obs[7] = obs[6] / max(obs[0], 1)
-
-        # Phi node features (indices 8-12)
-        obs[8] = 2.0 * self._has_recursion  # PHIInsts
+        obs[8] = 2.0 * self._has_recursion
         obs[9] = obs[8] * 0.5
         obs[10] = obs[8] * 0.3
         obs[11] = obs[8] * 0.2
         obs[12] = obs[8] / max(obs[0], 1)
-
-        # Instruction features (indices 13-20)
-        obs[13] = self._current_inst  # TotalInsts (raw count)
-        obs[14] = 3.0 * self._complexity  # RetInst
-        obs[15] = 2.0 * self._complexity  # CallInst
-        obs[16] = self._has_heavy_math * 5.0 * self._complexity  # IntToFloatInst
-        obs[17] = 1.0 * self._has_heavy_math  # FloatToIntInst
-        obs[18] = 0.5 * self._has_heavy_math  # BitcastInst
-
-        # Arithmetic features (indices 19-28)
-        obs[19] = 8.0 * self._complexity  # AddInst
-        obs[20] = 4.0 * self._complexity  # SubInst
-        obs[21] = 6.0 * self._complexity * self._has_heavy_math  # MulInst
-        obs[22] = 2.0 * self._complexity * self._has_heavy_math  # DivInst
-        obs[23] = 3.0 * self._complexity  # AndInst
-        obs[24] = 2.0 * self._complexity  # OrInst
-        obs[25] = 1.0 * self._complexity  # XorInst
-        obs[26] = 4.0 * self._complexity  # ShlInst
-        obs[27] = 2.0 * self._complexity  # LshrInst
-        obs[28] = 1.0 * self._complexity  # AshrInst
-
-        # Memory features (indices 29-34)
-        obs[29] = 6.0 * self._complexity  # AllocaInst
-        obs[30] = 10.0 * self._complexity  # LoadInst
-        obs[31] = 8.0 * self._complexity  # StoreInst
-        obs[32] = 2.0 * self._complexity  # GetElementPtrInst
-        obs[33] = 3.0 * self._complexity  # FenceInst
-        obs[34] = 1.0 * self._complexity  # MemSetInst
-
-        # Comparison features (indices 35-39)
-        obs[35] = 5.0 * self._complexity  # ICmpInst
-        obs[36] = 2.0 * self._complexity * self._has_heavy_math  # FCmpInst
-        obs[37] = 1.0 * self._complexity  # SelectInst
-        obs[38] = obs[35] + obs[36]  # CompareCountTotal
+        obs[13] = self._current_inst
+        obs[14] = 3.0 * self._complexity
+        obs[15] = 2.0 * self._complexity
+        obs[16] = self._has_heavy_math * 5.0 * self._complexity
+        obs[17] = 1.0 * self._has_heavy_math
+        obs[18] = 0.5 * self._has_heavy_math
+        obs[19] = 8.0 * self._complexity
+        obs[20] = 4.0 * self._complexity
+        obs[21] = 6.0 * self._complexity * self._has_heavy_math
+        obs[22] = 2.0 * self._complexity * self._has_heavy_math
+        obs[23] = 3.0 * self._complexity
+        obs[24] = 2.0 * self._complexity
+        obs[25] = 1.0 * self._complexity
+        obs[26] = 4.0 * self._complexity
+        obs[27] = 2.0 * self._complexity
+        obs[28] = 1.0 * self._complexity
+        obs[29] = 6.0 * self._complexity
+        obs[30] = 10.0 * self._complexity
+        obs[31] = 8.0 * self._complexity
+        obs[32] = 2.0 * self._complexity
+        obs[33] = 3.0 * self._complexity
+        obs[34] = 1.0 * self._complexity
+        obs[35] = 5.0 * self._complexity
+        obs[36] = 2.0 * self._complexity * self._has_heavy_math
+        obs[37] = 1.0 * self._complexity
+        obs[38] = obs[35] + obs[36]
         obs[39] = obs[38] / max(obs[13], 1)
-
-        # Loop features (indices 40-47)
-        obs[40] = float(self._has_loops) * 5.0 * self._complexity  # NumLoops
-        obs[41] = obs[40] * 0.8  # HasCanonicalLoop
-        obs[42] = obs[40] * 0.3  # HasNoCanonicalLoop
-        obs[43] = obs[40] * 0.1  # BlockInLoop
-        obs[44] = obs[40] * 0.05  # LoopExits
-        obs[45] = obs[44] / max(obs[40], 1)  # LoopExitRatio
-        obs[46] = obs[43] / max(obs[0], 1)  # LoopBlocksRatio
-        obs[47] = 2.0 * self._has_loops  # InstructionsInLoopBlocks
-
-        # Derived features (indices 48-55)
-        obs[48] = inst_ratio  # Current/original instruction ratio
-        obs[49] = len(self._applied_passes)  # Steps taken
+        obs[40] = float(self._has_loops) * 5.0 * self._complexity
+        obs[41] = obs[40] * 0.8
+        obs[42] = obs[40] * 0.3
+        obs[43] = obs[40] * 0.1
+        obs[44] = obs[40] * 0.05
+        obs[45] = obs[44] / max(obs[40], 1)
+        obs[46] = obs[43] / max(obs[0], 1)
+        obs[47] = 2.0 * self._has_loops
+        obs[48] = inst_ratio
+        obs[49] = len(self._applied_passes)
         obs[50] = self._has_heavy_math * 1.0
         obs[51] = self._has_recursion * 1.0
         obs[52] = self._has_loops * 1.0
         obs[53] = self._complexity
         obs[54] = inst_ratio * self._complexity
-        obs[55] = len(set(self._applied_passes)) / max(NUM_PASSES, 1)  # Diversity
+        obs[55] = len(set(self._applied_passes)) / max(NUM_PASSES, 1)
 
         return obs
 
@@ -453,7 +434,11 @@ def _has_compilergym() -> bool:
 
 
 class CompilerGymWrapper:
-    """Wrapper around CompilerGym's LLVM environment (Linux only)."""
+    """Wrapper around CompilerGym's LLVM environment (Linux only).
+
+    Maps our USEFUL_PASSES to CompilerGym's action space and provides
+    the same interface as SyntheticCompilerEnv.
+    """
 
     def __init__(
         self,
@@ -468,8 +453,11 @@ class CompilerGymWrapper:
         self._initial_inst_count = 0
         self._current_inst_count = 0
         self._applied_passes: list[int] = []
+        self._recent_rewards: list[float] = []
+        self._cumulative_reward = 0.0
         self._step = 0
         self._done = False
+        self._action_map: dict[int, int] = {}  # our pass_id -> CompilerGym action
 
     def open(self):
         try:
@@ -499,11 +487,39 @@ class CompilerGymWrapper:
     def __exit__(self, *args):
         self.close()
 
+    def _build_action_map(self):
+        """Map our pass IDs to CompilerGym action indices.
+
+        CompilerGym's action_space.names contains flag-style names like "-mem2reg".
+        We need to find which action index corresponds to each of our passes.
+        """
+        if self.env is None:
+            return
+
+        # Get CompilerGym's action names
+        action_names = list(self.env.action_space.names)
+
+        self._action_map = {}
+        for pass_id, pass_name in enumerate(USEFUL_PASSES):
+            flag = COMPILERGYM_FLAG_MAP.get(pass_name, f"-{pass_name}")
+            # Handle duplicate flags (simplifycfg-2, instcombine-2)
+            # These map to the same flag but we track them as different passes
+            try:
+                action_idx = action_names.index(flag)
+                self._action_map[pass_id] = action_idx
+            except ValueError:
+                # Flag not found in CompilerGym — skip this pass
+                pass
+
     def reset(self) -> tuple[np.ndarray, int]:
         obs = self.env.reset()
-        self._initial_inst_count = self.env.observation["IrInstructionCount"]
+        self._build_action_map()
+
+        self._initial_inst_count = int(self.env.observation["IrInstructionCount"])
         self._current_inst_count = self._initial_inst_count
         self._applied_passes = []
+        self._recent_rewards = []
+        self._cumulative_reward = 0.0
         self._step = 0
         self._done = False
 
@@ -523,32 +539,55 @@ class CompilerGymWrapper:
         pass_name = pass_id_to_name(pass_id)
         prev_inst = self._current_inst_count
 
+        # Map our pass_id to CompilerGym action
+        if pass_id not in self._action_map:
+            # Pass not available in CompilerGym — return penalty
+            feedback = CompilerFeedback(
+                instruction_count=self._current_inst_count,
+                prev_instruction_count=prev_inst,
+                initial_instruction_count=self._initial_inst_count,
+                compiled=False,
+                reward=-1.0,
+                cumulative_reward=self._cumulative_reward,
+                step=self._step,
+                max_steps=30,
+                applied_passes=list(self._applied_passes),
+                recent_rewards=list(self._recent_rewards),
+            )
+            self._done = True
+            obs = np.zeros(56, dtype=np.float32)
+            if self.observation_space_name == "Autophase":
+                obs = np.array(self.env.observation["Autophase"], dtype=np.float32)
+            return obs, feedback, True, {"pass_name": pass_name, "error": "unknown_pass"}
+
+        cg_action = self._action_map[pass_id]
+
         try:
-            # CompilerGym expects action as int (index into action_space)
-            # Some pass names might not map directly; try using pass_id as action
-            obs, reward, done, info = self.env.step(pass_id)
-            self._current_inst_count = self.env.observation["IrInstructionCount"]
+            obs, reward, done, info = self.env.step(cg_action)
+            self._current_inst_count = int(self.env.observation["IrInstructionCount"])
+
+            # CompilerGym reward is inst_count reduction (positive = good)
+            # Convert to log-ratio like our synthetic env
+            if prev_inst > 0 and self._current_inst_count > 0:
+                log_reward = math.log(prev_inst / max(self._current_inst_count, 1))
+            else:
+                log_reward = 0.0
+
             compiled = True
             self._done = done
-        except Exception:
+
+        except Exception as e:
             compiled = False
             self._done = True
-            reward = -1.0
+            log_reward = -1.0
+            obs = np.zeros(56, dtype=np.float32)
+            if self.observation_space_name == "Autophase":
+                obs = np.array(self.env.observation["Autophase"], dtype=np.float32)
 
         self._applied_passes.append(pass_id)
+        self._recent_rewards.append(log_reward)
+        self._cumulative_reward += log_reward
         self._step += 1
-
-        if compiled and prev_inst > 0 and self._current_inst_count > 0:
-            log_reward = math.log(prev_inst / max(self._current_inst_count, 1))
-        else:
-            log_reward = -2.0 if not compiled else 0.0
-
-        feedback = CompilerFeedback(
-            instruction_count=self._current_inst_count,
-            prev_instruction_count=prev_inst,
-            compiled=compiled,
-            reward=log_reward,
-        )
 
         if self.observation_space_name == "Autophase":
             autophase = np.array(
@@ -557,21 +596,43 @@ class CompilerGymWrapper:
         else:
             autophase = np.array(obs, dtype=np.float32)
 
+        feedback = CompilerFeedback(
+            instruction_count=self._current_inst_count,
+            prev_instruction_count=prev_inst,
+            initial_instruction_count=self._initial_inst_count,
+            compiled=compiled,
+            reward=log_reward,
+            cumulative_reward=self._cumulative_reward,
+            step=self._step,
+            max_steps=30,
+            applied_passes=list(self._applied_passes),
+            recent_rewards=list(self._recent_rewards),
+        )
+
         info = {
             "pass_name": pass_name,
             "initial_inst_count": self._initial_inst_count,
             "current_inst_count": self._current_inst_count,
             "step": self._step,
             "applied_passes": list(self._applied_passes),
+            "compiled": compiled,
         }
 
         return autophase, feedback, self._done, info
 
     def get_observation_dim(self) -> int:
-        return 56  # Autophase
+        return 56
 
     def get_num_passes(self) -> int:
         return NUM_PASSES
+
+    @property
+    def initial_inst_count(self) -> int:
+        return self._initial_inst_count
+
+    @property
+    def current_inst_count(self) -> int:
+        return self._current_inst_count
 
 
 # ──────────────────────────────────────────────────────────────
@@ -587,7 +648,7 @@ def make_compiler_env(
     """Create a compiler environment.
 
     Args:
-        benchmark_id: Benchmark name
+        benchmark_id: Benchmark name (or "cbench-v1/name" for CompilerGym)
         use_compilergym: If True and available, use real CompilerGym
         seed: Random seed
 
