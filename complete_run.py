@@ -22,6 +22,17 @@ def setup_environment():
     print("=" * 60)
     print("STEP 1: Environment setup")
     print("=" * 60)
+    
+    # CRITICAL: Downgrade setuptools and wheel to fix gym install
+    # See: https://stackoverflow.com/questions/76129688
+    print("Fixing setuptools/wheel for gym compatibility...")
+    subprocess.run([sys.executable, "-m", "pip", "install", "setuptools==65.5.0", "wheel<0.40.0", "-q"], capture_output=True)
+    
+    # Install compiler_gym (it depends on old gym which needs fixed setuptools)
+    result = subprocess.run([sys.executable, "-m", "pip", "install", "compiler_gym", "-q"], capture_output=True)
+    if result.returncode != 0:
+        print(f"compiler_gym install warning: {result.stderr.decode()[:300] if result.stderr else 'unknown'}")
+    
     os.environ["OMP_NUM_THREADS"] = "1"
     os.environ["COMPILER_GYM_HOME"] = "/content/compiler_gym"
     if PROJECT_DIR not in sys.path:
@@ -38,36 +49,47 @@ def verify_compiler_gym():
     os.environ["OMP_NUM_THREADS"] = "1"
     os.environ["COMPILER_GYM_HOME"] = "/content/compiler_gym"
     
-    import compiler_gym
-    env = compiler_gym.make("llvm-v0", benchmark="cbench-v1/qsort",
-        observation_space="Autophase", reward_space="IrInstructionCountOz")
-    obs = env.reset()
-    ap = obs["Autophase"]
-    ic = obs["IrInstructionCount"]
-    print(f"Autophase: {len(ap)} features, Initial inst: {ic}")
-    for i in range(3):
-        action = env.action_space.sample()
-        obs, reward, done, info = env.step(action)
-        inst = obs["IrInstructionCount"]
-        print(f"  Step {i}: inst={inst} reward={reward:.2f} done={done}")
-    env.close()
-    print("CompilerGym OK!")
+    try:
+        import compiler_gym
+    except ImportError as e:
+        print(f"compiler_gym not available: {e}")
+        print("Using synthetic mode for training")
+        return False
+    
+    try:
+        env = compiler_gym.make("llvm-v0", benchmark="cbench-v1/qsort",
+            observation_space="Autophase", reward_space="IrInstructionCountOz")
+        obs = env.reset()
+        ap = obs["Autophase"]
+        ic = obs["IrInstructionCount"]
+        print(f"Autophase: {len(ap)} features, Initial inst: {ic}")
+        for i in range(3):
+            action = env.action_space.sample()
+            obs, reward, done, info = env.step(action)
+            inst = obs["IrInstructionCount"]
+            print(f"  Step {i}: inst={inst} reward={reward:.2f} done={done}")
+        env.close()
+        print("CompilerGym OK!")
+        return True
+    except Exception as e:
+        print(f"CompilerGym error: {e}")
+        print("Using synthetic mode for training")
+        return False
 
 
-def train_and_benchmark():
-    """Train TRM and benchmark with real CompilerGym."""
+def train_and_benchmark(use_synthetic=True):
+    """Train TRM and benchmark."""
     print("=" * 60)
-    print("STEP 4: Training TRM + Benchmarking with REAL LLVM")
+    print("STEP 4: Training TRM + Benchmarking")
     print("=" * 60)
     
     os.environ["OMP_NUM_THREADS"] = "1"
     os.environ["COMPILER_GYM_HOME"] = "/content/compiler_gym"
     os.environ["CUDA_VISIBLE_DEVICES"] = ""
     
-    # Train on synthetic, benchmark with real CompilerGym
+    # Build args
     sys.argv = [
         "trm_compiler_real_llvm.py",
-        "--synthetic",
         "--epochs", "5",
         "--episodes", "5",
         "--benchmarks", "qsort", "adpcm",
@@ -77,6 +99,10 @@ def train_and_benchmark():
         "--seed", "42"
     ]
     
+    # Add synthetic flag if needed
+    if use_synthetic:
+        sys.argv.append("--synthetic")
+    
     sys.path.insert(0, PROJECT_DIR)
     
     from trm_compiler_real_llvm import main as train_main
@@ -85,14 +111,15 @@ def train_and_benchmark():
 
 def main():
     setup_environment()
-    try:
-        verify_compiler_gym()
-    except Exception as exc:
-        print(f"CompilerGym unavailable, continuing in synthetic mode only: {exc}")
-    train_and_benchmark()
+    
+    # Check if CompilerGym works
+    cg_ok = verify_compiler_gym()
+    
+    # Train (use synthetic mode if CompilerGym failed)
+    train_and_benchmark(use_synthetic=not cg_ok)
     
     print("=" * 60)
-    print("DONE! TRM trained and benchmarked on REAL LLVM.")
+    print("DONE!")
     print("=" * 60)
 
 
