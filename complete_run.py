@@ -70,11 +70,12 @@ def step1_setup():
             print(f"  Warning: {dep} failed, continuing...")
     
     # Install gymnasium (new maintained version) + shimmy for compatibility
-    print("Installing gymnasium + shimmy (replaces old gym)...")
+    print("Installing gymnasium + shimmy...")
     run(f"{VENV_PIP} install gymnasium shimmy -q", check=False)
     
-    # Install cloudpickle (needed by many envs)
-    print("Installing cloudpickle...")
+    # Install OLD gym for compiler_gym compatibility (compiler_gym imports 'gym')
+    print("Installing old gym for compiler_gym...")
+    run(f"{VENV_PIP} install 'gym>=0.18.0,<0.22.0' --no-deps -q", check=False)
     run(f"{VENV_PIP} install cloudpickle -q", check=False)
     
     # Ensure numpy<2
@@ -97,12 +98,7 @@ def step2_verify():
     # Write test to temp file to avoid shell escaping issues
     test_file = "/tmp/test_compiler_gym.py"
     with open(test_file, "w") as f:
-        f.write('''# Use shimmy to make compiler_gym work with gymnasium
-import shimmy
-import gymnasium as gym
-gym.register_envs(shimmy)
-
-import compiler_gym
+        f.write('''import compiler_gym
 env = compiler_gym.make("llvm-v0", benchmark="cbench-v1/qsort",
     observation_space="Autophase", reward_space="IrInstructionCountOz")
 obs = env.reset()
