@@ -3,13 +3,18 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "trm-gemm"
+name = "trm-experiments"
 version = "0.1.0"
-description = "Portable TRM-style GEMM schedule refinement prototype"
+description = "TRM-style tiny recursive reasoning networks for compiler and kernel optimization"
 requires-python = ">=3.11"
 dependencies = [
   "torch",
+  "numpy",
 ]
 
+[project.optional-dependencies]
+compiler = ["compiler_gym"]
+all = ["compiler_gym"]
+
 [tool.setuptools]
-packages = ["trm_gemm"]
+packages = ["trm_gemm", "trm_compiler"]
