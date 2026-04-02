@@ -732,8 +732,13 @@ def main():
         try:
             import compiler_gym
             print(f"[ok] compiler_gym {compiler_gym.__version__}")
-        except ImportError:
-            print("[warn] compiler_gym not found, falling back to --synthetic")
+        except ImportError as e:
+            print(f"[warn] compiler_gym import error: {e}")
+            print("[warn] falling back to --synthetic")
+            use_cg = False
+        except Exception as e:
+            print(f"[warn] compiler_gym error: {e}")
+            print("[warn] falling back to --synthetic")
             use_cg = False
 
     print(f"Device: {device}  |  CompilerGym: {use_cg}  |  "
