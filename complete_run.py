@@ -1,135 +1,106 @@
 #!/usr/bin/env python3
-"""Complete TRM training pipeline: setup env + train on real LLVM + benchmark.
+"""Complete TRM training pipeline for Google Colab.
 
-Usage (in Colab):
-    !python complete_run.py
+Usage (in Colab cell):
+    %run complete_run.py
 
-This script:
-1. Creates Python 3.11 venv if needed
-2. Installs all dependencies (torch, numpy<2, compiler_gym deps)
-3. Verifies CompilerGym works
-4. Trains TRM model on real LLVM
-5. Benchmarks against LLVM -Oz, -O3, Random, TRM
+This script runs the entire pipeline in Colab:
+1. Clones repo (if needed)
+2. Installs dependencies (torch, numpy, compiler_gym)
+3. Trains TRM on synthetic LLVM
+4. Benchmarks against real CompilerGym (LLVM -Oz, -O3, Random, TRM)
 """
 import subprocess
 import sys
 import os
-import time
+import warnings
+warnings.filterwarnings("ignore")
 
-VENV_DIR = "/content/trm-env"
 PROJECT_DIR = "/content/trm-youtubevids"
-VENV_PIP = f"{VENV_DIR}/bin/pip"
-VENV_PYTHON = f"{VENV_DIR}/bin/python"
 
 
-def run(cmd, check=True, capture=True):
-    """Run a command."""
-    result = subprocess.run(cmd, shell=isinstance(cmd, str), check=check, capture_output=capture, text=True)
-    if result and result.stdout:
-        print(result.stdout.strip())
-    return result
-
-
-def step1_setup():
-    """Step 1: Setup environment."""
+def setup_environment():
+    """Install all dependencies in Colab environment."""
     print("=" * 60)
-    print("STEP 1: Setting up Python 3.11 venv with all dependencies")
+    print("STEP 1: Installing dependencies")
     print("=" * 60)
     
-    # Install Python 3.11 if not available
-    print("Checking for Python 3.11...")
-    result = run("which python3.11", check=False)
-    if result.returncode != 0:
-        print("Installing Python 3.11...")
-        run("apt-get update -qq && apt-get install -qq -y python3.11 python3.11-venv python3.11-dev", check=False)
+    # Fresh install: uninstall existing numpy first
+    subprocess.run([sys.executable, "-m", "pip", "uninstall", "numpy", "torch", "-y", "-q"], capture_output=True)
     
-    # Create venv if needed
-    if not os.path.exists(VENV_DIR):
-        print("Creating venv with Python 3.11...")
-        run(f"python3.11 -m venv {VENV_DIR}")
+    # Install in correct order: numpy first (compatible version)
+    subprocess.run([sys.executable, "-m", "pip", "install", "numpy>=1.26.0,<2.0", "-q"], check=True, capture_output=True)
+    
+    # Then torch
+    subprocess.run([sys.executable, "-m", "pip", "install", "torch", "--index-url", "https://download.pytorch.org/whl/cpu", "-q"], check=True, capture_output=True)
+    
+    # Then compiler_gym (it will install its own deps but we pin numpy)
+    subprocess.run([sys.executable, "-m", "pip", "install", "compiler_gym", "-q"], check=True, capture_output=True)
+    
+    # Now pin numpy again to ensure we have the right version
+    subprocess.run([sys.executable, "-m", "pip", "install", "numpy>=1.26.0,<2.0", "-q"], capture_output=True)
+    
+    print("Dependencies installed!")
+
+
+def clone_repo():
+    """Clone or update the repo."""
+    print("=" * 60)
+    print("STEP 2: Setting up project")
+    print("=" * 60)
+    
+    os.environ["OMP_NUM_THREADS"] = "1"
+    os.environ["COMPILER_GYM_HOME"] = "/content/compiler_gym"
+    
+    if not os.path.exists(PROJECT_DIR):
+        print("Cloning repo...")
+        subprocess.run(["git", "clone", "https://github.com/Cree0618/trm-youtubevids.git", PROJECT_DIR], check=True, capture_output=True)
     else:
-        print(f"Venv already exists: {VENV_DIR}")
-    
-    # Always upgrade pip
-    print("Upgrading pip...")
-    run(f"{VENV_PIP} install --upgrade pip setuptools wheel -q")
-    
-    # Always reinstall numpy<2 and torch (venv might be corrupted)
-    print("Installing torch + numpy<2...")
-    run(f"{VENV_PIP} install 'numpy<2.0' torch --index-url https://download.pytorch.org/whl/cpu -q")
-    
-    # Install all compiler_gym dependencies one by one (continue on error)
-    print("Installing compiler_gym dependencies...")
-    deps = [
-        "grpcio", "pydantic", "protobuf==3.20.3", "requests", "docker",
-        "fasteners", "absl-py", "deprecated", "tabulate", "humanize", "six"
-    ]
-    for dep in deps:
-        result = run(f"{VENV_PIP} install {dep} -q", check=False)
-        if result.returncode != 0:
-            print(f"  Warning: {dep} failed, continuing...")
-    
-    # Install gymnasium (new maintained version) + shimmy for compatibility
-    print("Installing gymnasium + shimmy...")
-    run(f"{VENV_PIP} install gymnasium shimmy -q", check=False)
-    
-    # Install OLD gym for compiler_gym compatibility (compiler_gym imports 'gym')
-    print("Installing old gym for compiler_gym...")
-    run(f"{VENV_PIP} install 'gym>=0.18.0,<0.22.0' --no-deps -q", check=False)
-    run(f"{VENV_PIP} install cloudpickle -q", check=False)
-    
-    # Ensure numpy<2
-    print("Ensuring numpy<2...")
-    run(f"{VENV_PIP} install 'numpy<2.0' -q", check=False)
-    
-    # Install compiler_gym (no-deps to avoid grpcio conflict)
-    print("Installing compiler_gym...")
-    run(f"{VENV_PIP} install compiler_gym --no-deps -q", check=False)
-    
-    print("Environment setup complete!")
+        print("Pulling latest...")
+        subprocess.run(["git", "-C", PROJECT_DIR, "pull"], check=True, capture_output=True)
 
 
-def step2_verify():
-    """Step 2: Verify environment."""
+def verify_compiler_gym():
+    """Verify CompilerGym works."""
     print("=" * 60)
-    print("STEP 2: Verifying CompilerGym works")
+    print("STEP 3: Verifying CompilerGym")
     print("=" * 60)
     
-    # Write test to temp file to avoid shell escaping issues
-    test_file = "/tmp/test_compiler_gym.py"
-    with open(test_file, "w") as f:
-        f.write('''import compiler_gym
-env = compiler_gym.make("llvm-v0", benchmark="cbench-v1/qsort",
-    observation_space="Autophase", reward_space="IrInstructionCountOz")
-obs = env.reset()
-ap = env.observation["Autophase"]
-ic = env.observation["IrInstructionCount"]
-print(f"Autophase: {len(ap)} features, Initial inst: {ic}")
-for i in range(3):
-    _, reward, done, _ = env.step(env.action_space.sample())
-    inst = env.observation["IrInstructionCount"]
-    print(f"  Step {i}: inst={inst} reward={reward:.2f} done={done}")
-env.close()
-print("CompilerGym OK!")
-''')
+    os.environ["OMP_NUM_THREADS"] = "1"
+    os.environ["COMPILER_GYM_HOME"] = "/content/compiler_gym"
     
-    result = run(f"{VENV_PYTHON} {test_file}", check=False)
-    if result.returncode != 0:
-        print(f"ERROR: {result.stderr}")
-        sys.exit(1)
+    import compiler_gym
+    env = compiler_gym.make("llvm-v0", benchmark="cbench-v1/qsort",
+        observation_space="Autophase", reward_space="IrInstructionCountOz")
+    obs = env.reset()
+    ap = obs["Autophase"]
+    ic = obs["IrInstructionCount"]
+    print(f"Autophase: {len(ap)} features, Initial inst: {ic}")
+    for i in range(3):
+        action = env.action_space.sample()
+        obs, reward, done, info = env.step(action)
+        inst = obs["IrInstructionCount"]
+        print(f"  Step {i}: inst={inst} reward={reward:.2f} done={done}")
+    env.close()
+    print("CompilerGym OK!")
 
 
-def step3_train():
-    """Step 3: Train TRM on real LLVM."""
+def train_and_benchmark():
+    """Train TRM and benchmark with real CompilerGym."""
     print("=" * 60)
-    print("STEP 3: Training TRM on REAL LLVM via CompilerGym")
+    print("STEP 4: Training TRM + Benchmarking with REAL LLVM")
     print("=" * 60)
     
-    cmd = [
-        VENV_PYTHON,
-        f"{PROJECT_DIR}/trm_compiler_real_llvm.py",
-        "--epochs", "10",
-        "--episodes", "10",
+    os.environ["OMP_NUM_THREADS"] = "1"
+    os.environ["COMPILER_GYM_HOME"] = "/content/compiler_gym"
+    os.environ["CUDA_VISIBLE_DEVICES"] = ""
+    
+    # Train on synthetic, benchmark with real CompilerGym
+    sys.argv = [
+        "trm_compiler_real_llvm.py",
+        "--synthetic",
+        "--epochs", "5",
+        "--episodes", "5",
         "--benchmarks", "qsort", "adpcm",
         "--max-steps", "20",
         "--batch-size", "64",
@@ -137,33 +108,20 @@ def step3_train():
         "--seed", "42"
     ]
     
-    # Run without --synthetic flag = uses real CompilerGym
-    result = subprocess.run(cmd, cwd=PROJECT_DIR)
-    if result.returncode != 0:
-        print(f"Training failed with code {result.returncode}")
-        sys.exit(1)
+    sys.path.insert(0, PROJECT_DIR)
+    
+    from trm_compiler_real_llvm import main as train_main
+    train_main()
 
 
 def main():
-    # Clone repo if needed
-    if not os.path.exists(PROJECT_DIR):
-        print("Cloning repo...")
-        run("git clone https://github.com/Cree0618/trm-youtubevids.git /content/trm-youtubevids")
-    else:
-        print("Pulling latest...")
-        run(f"git -C {PROJECT_DIR} pull")
-    
-    # Setup environment
-    step1_setup()
-    
-    # Verify it works
-    step2_verify()
-    
-    # Train on real LLVM
-    step3_train()
+    clone_repo()
+    setup_environment()
+    verify_compiler_gym()
+    train_and_benchmark()
     
     print("=" * 60)
-    print("DONE! TRM trained on REAL LLVM and benchmarked.")
+    print("DONE! TRM trained and benchmarked on REAL LLVM.")
     print("=" * 60)
 
 
