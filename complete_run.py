@@ -55,15 +55,18 @@ def step1_setup():
     print("Installing compiler_gym dependencies...")
     deps = [
         "grpcio", "pydantic", "protobuf==3.20.3", "requests", "docker",
-        "fasteners", "absl-py", "deprecated", "tabulate", "gym==0.21.0",
-        "humanize", "six"
+        "fasteners", "absl-py", "deprecated", "tabulate", "humanize", "six"
     ]
     for dep in deps:
         result = run(f"{VENV_PIP} install {dep} -q", check=False)
         if result.returncode != 0:
             print(f"  Warning: {dep} failed, continuing...")
     
-    # Install numpy<2 separately
+    # Install gym (the old one that compiler_gym needs)
+    print("Installing gym (gymnasium as gym compatibility)...")
+    run(f"{VENV_PIP} install gym==0.21.0 -q", check=False)
+    
+    # Ensure numpy<2
     print("Ensuring numpy<2...")
     run(f"{VENV_PIP} install 'numpy<2.0' -q", check=False)
     
