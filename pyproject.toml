@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "trm-experiments"
 version = "0.1.0"
 description = "TRM-style tiny recursive reasoning networks for compiler and kernel optimization"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
   "torch",
   "numpy",

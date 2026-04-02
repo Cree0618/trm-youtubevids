@@ -4,11 +4,9 @@
 Usage (in Colab cell):
     %run complete_run.py
 
-This script runs the entire pipeline in Colab:
-1. Clones repo (if needed)
-2. Installs dependencies (torch, numpy, compiler_gym)
-3. Trains TRM on synthetic LLVM
-4. Benchmarks against real CompilerGym (LLVM -Oz, -O3, Random, TRM)
+This script runs the compiler pipeline from an already checked-out repo.
+It is safe for Colab because it does not self-clone the repo or uninstall core
+packages. By default it runs the synthetic/heuristic path.
 """
 import subprocess
 import sys
@@ -16,48 +14,19 @@ import os
 import warnings
 warnings.filterwarnings("ignore")
 
-PROJECT_DIR = "/content/trm-youtubevids"
+PROJECT_DIR = os.environ.get("TRM_PROJECT_DIR", os.getcwd())
 
 
 def setup_environment():
-    """Install all dependencies in Colab environment."""
+    """Lightweight Colab-safe environment setup."""
     print("=" * 60)
-    print("STEP 1: Installing dependencies")
+    print("STEP 1: Environment setup")
     print("=" * 60)
-    
-    # Fresh install: uninstall existing numpy first
-    subprocess.run([sys.executable, "-m", "pip", "uninstall", "numpy", "torch", "-y", "-q"], capture_output=True)
-    
-    # Install in correct order: numpy first (compatible version)
-    subprocess.run([sys.executable, "-m", "pip", "install", "numpy>=1.26.0,<2.0", "-q"], check=True, capture_output=True)
-    
-    # Then torch
-    subprocess.run([sys.executable, "-m", "pip", "install", "torch", "--index-url", "https://download.pytorch.org/whl/cpu", "-q"], check=True, capture_output=True)
-    
-    # Then compiler_gym (it will install its own deps but we pin numpy)
-    subprocess.run([sys.executable, "-m", "pip", "install", "compiler_gym", "-q"], check=True, capture_output=True)
-    
-    # Now pin numpy again to ensure we have the right version
-    subprocess.run([sys.executable, "-m", "pip", "install", "numpy>=1.26.0,<2.0", "-q"], capture_output=True)
-    
-    print("Dependencies installed!")
-
-
-def clone_repo():
-    """Clone or update the repo."""
-    print("=" * 60)
-    print("STEP 2: Setting up project")
-    print("=" * 60)
-    
     os.environ["OMP_NUM_THREADS"] = "1"
     os.environ["COMPILER_GYM_HOME"] = "/content/compiler_gym"
-    
-    if not os.path.exists(PROJECT_DIR):
-        print("Cloning repo...")
-        subprocess.run(["git", "clone", "https://github.com/Cree0618/trm-youtubevids.git", PROJECT_DIR], check=True, capture_output=True)
-    else:
-        print("Pulling latest...")
-        subprocess.run(["git", "-C", PROJECT_DIR, "pull"], check=True, capture_output=True)
+    if PROJECT_DIR not in sys.path:
+        sys.path.insert(0, PROJECT_DIR)
+    print(f"PROJECT_DIR={PROJECT_DIR}")
 
 
 def verify_compiler_gym():
@@ -115,9 +84,11 @@ def train_and_benchmark():
 
 
 def main():
-    clone_repo()
     setup_environment()
-    verify_compiler_gym()
+    try:
+        verify_compiler_gym()
+    except Exception as exc:
+        print(f"CompilerGym unavailable, continuing in synthetic mode only: {exc}")
     train_and_benchmark()
     
     print("=" * 60)
