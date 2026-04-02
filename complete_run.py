@@ -62,9 +62,11 @@ def step1_setup():
         if result.returncode != 0:
             print(f"  Warning: {dep} failed, continuing...")
     
-    # Install gym (the old one that compiler_gym needs)
-    print("Installing gym (gymnasium as gym compatibility)...")
-    run(f"{VENV_PIP} install gym==0.21.0 -q", check=False)
+    # Install gym with explicit dependencies (OLD gym that compiler_gym needs)
+    print("Installing gym==0.21.0 with dependencies...")
+    run(f"{VENV_PIP} install 'gym>=0.18.0,<0.22.0' --no-deps -q", check=False)
+    # Now install gym deps separately
+    run(f"{VENV_PIP} install cloudpickle -q", check=False)
     
     # Ensure numpy<2
     print("Ensuring numpy<2...")
