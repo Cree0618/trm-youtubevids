@@ -12,7 +12,7 @@ from .env_wrapper import (
     pass_id_to_name,
     pass_name_to_id,
 )
-from .model import TinyPassOrderingRefiner, rollout_pass_optimizer
+from .model import TinyPassOrderingRefiner, rollout_pass_optimizer, rollout_blind, rollout_closed_loop
 from .data import generate_compiler_traces, CompilerTraceDataset
 from .training import compute_compiler_losses
 from .baselines import (
@@ -44,6 +44,8 @@ __all__ = [
     "pass_name_to_id",
     "TinyPassOrderingRefiner",
     "rollout_pass_optimizer",
+    "rollout_blind",
+    "rollout_closed_loop",
     "generate_compiler_traces",
     "CompilerTraceDataset",
     "compute_compiler_losses",

@@ -311,8 +311,8 @@ class CompilerTraceDataset(Dataset):
         )
         schedule = torch.tensor(schedule_vec, dtype=torch.float32)
 
-        # Feedback encoding
-        feedback = torch.tensor(record.feedback.encode(), dtype=torch.float32)
+        # Feedback encoding (use simple 4-dim for training)
+        feedback = torch.tensor(record.feedback.simple_encode(), dtype=torch.float32)
 
         # Target pass ID
         pass_id = torch.tensor(record.edit.pass_id, dtype=torch.long)

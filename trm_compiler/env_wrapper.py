@@ -217,6 +217,8 @@ class SyntheticCompilerEnv:
         self._current_inst = self._base_inst
         self._initial_inst = self._base_inst
         self._applied_passes: list[int] = []
+        self._recent_rewards: list[float] = []
+        self._cumulative_reward = 0.0
         self._step = 0
         self._done = False
         self._obs = self._generate_observation()
@@ -224,6 +226,8 @@ class SyntheticCompilerEnv:
     def reset(self) -> tuple[np.ndarray, int]:
         self._current_inst = self._initial_inst
         self._applied_passes = []
+        self._recent_rewards = []
+        self._cumulative_reward = 0.0
         self._step = 0
         self._done = False
         self._obs = self._generate_observation()
@@ -250,6 +254,8 @@ class SyntheticCompilerEnv:
             log_reward = 0.0
 
         self._applied_passes.append(pass_id)
+        self._recent_rewards.append(log_reward)
+        self._cumulative_reward += log_reward
         self._step += 1
 
         # Halt conditions
@@ -263,11 +269,18 @@ class SyntheticCompilerEnv:
 
         self._obs = self._generate_observation()
 
+        # Rich feedback with all context
         feedback = CompilerFeedback(
             instruction_count=self._current_inst,
             prev_instruction_count=prev_inst,
+            initial_instruction_count=self._initial_inst,
             compiled=True,
             reward=log_reward,
+            cumulative_reward=self._cumulative_reward,
+            step=self._step,
+            max_steps=40,
+            applied_passes=list(self._applied_passes),
+            recent_rewards=list(self._recent_rewards),
         )
 
         info = {

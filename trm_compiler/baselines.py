@@ -353,33 +353,49 @@ def run_full_benchmark(
         bench_results["beam_5"] = r
         print(f"  Beam(5):   reward={r['total_reward']:+8.4f}  steps={r['num_steps']}")
 
-        # 5. TRM model (if provided)
+        # 5. TRM blind (no real feedback)
         if model is not None:
+            from .model import rollout_blind, rollout_closed_loop
             model.eval()
-            env = SyntheticCompilerEnv(benchmark_id=bench_id, seed=seed)
-            obs, _ = env.reset()
 
+            # Blind: observation never updates
+            env_blind = SyntheticCompilerEnv(benchmark_id=bench_id, seed=seed)
+            obs, _ = env_blind.reset()
             total_reward = 0.0
             sequence = []
             for step in range(max_steps):
-                trace = rollout_pass_optimizer(model, obs, max_steps=1,
-                                               temperature=1.0, device=device)
+                trace = rollout_blind(model, obs, max_steps=1,
+                                      temperature=1.0, device=device)
                 if trace and trace[0]["pass_id"] >= 0:
                     pass_id = trace[0]["pass_id"]
-                    obs, feedback, done, info = env.step(pass_id)
+                    obs, feedback, done, info = env_blind.step(pass_id)
                     total_reward += feedback.reward
                     sequence.append(pass_id)
                     if done:
                         break
                 else:
                     break
-
-            bench_results["trm"] = {
+            bench_results["trm_blind"] = {
                 "total_reward": total_reward,
                 "sequence": [pass_id_to_name(p) for p in sequence],
                 "num_steps": len(sequence),
             }
-            print(f"  TRM:       reward={total_reward:+8.4f}  steps={len(sequence)}")
+            print(f"  TRM blind: reward={total_reward:+8.4f}  steps={len(sequence)}  "
+                  f"inst={env_blind.current_inst_count}/{env_blind.initial_inst_count}")
+
+            # Closed-loop: real feedback after each pass
+            env_cl = SyntheticCompilerEnv(benchmark_id=bench_id, seed=seed)
+            trace_cl = rollout_closed_loop(model, env_cl, max_steps=max_steps,
+                                           temperature=1.0, device=device)
+            cl_reward = trace_cl[-1]["total_real_reward"] if trace_cl else 0.0
+            cl_steps = len([s for s in trace_cl if s["pass_id"] >= 0])
+            bench_results["trm_closed_loop"] = {
+                "total_reward": cl_reward,
+                "sequence": [pass_id_to_name(s["pass_id"]) for s in trace_cl if s["pass_id"] >= 0],
+                "num_steps": cl_steps,
+            }
+            print(f"  TRM closed: reward={cl_reward:+8.4f}  steps={cl_steps}  "
+                  f"inst={env_cl.current_inst_count}/{env_cl.initial_inst_count}")
 
         results[bench_id] = bench_results
 
