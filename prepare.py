@@ -248,7 +248,12 @@ def evaluate(
                 schedule_vec, dtype=torch.float32, device=device
             ).unsqueeze(0)
 
-            outputs = model(obs_tensor, schedule_tensor, feedback_tensor, y, z)
+            all_outputs = model(obs_tensor, schedule_tensor, feedback_tensor, y, z)
+            # Handle both single-step (dict) and deep supervision (list) outputs
+            if isinstance(all_outputs, list):
+                outputs = all_outputs[-1]
+            else:
+                outputs = all_outputs
             y, z = outputs["y"], outputs["z"]
 
             halt_prob = torch.sigmoid(outputs["halt_logit"]).item()

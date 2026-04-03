@@ -126,11 +126,21 @@ environments. The maintained dependency is `gymnasium`, not `gym`.
 |---|---|
 | Dual latents (answer `y` + reasoning `z`) | Separate `net_z` and `net_y` |
 | Inner recursion loop (`n=6`) | `for _ in range(n): z = net_z(x, y, z)` |
-| 2-layer networks | 2-layer MLPs (per paper) |
+| 3-layer MLPs | 3-layer MLPs (improved over paper's 2-layer) |
 | Multi-head output | pass + feasibility + value + halt |
 | Log-ratio reward | `log(prev / next)` for scale invariance |
 
-**Not yet implemented:** Deep recursion (T-1 no-grad), Deep supervision, EMA.
+**Not implemented:** Deep supervision (empirically worse for this task), EMA, 1-step gradient approximation.
+
+### Empirical Findings
+
+**Deep supervision does NOT help for compiler pass ordering.** Despite being the primary driver of performance gains in the TRM paper (doubling accuracy on ARC-AGI from 19% to 39%), it consistently underperforms on our task:
+
+- **Fair benchmark (100 epochs each):** baseline +1.79 vs deep_sup_2 +1.57 vs deep_sup_4 +1.65
+- **Reason:** Pass ordering is a direct mapping task, not an iterative reasoning puzzle. The summed losses across supervision steps create noisier gradients, and detached z prevents learning a coherent reasoning trajectory.
+- **Best config so far:** latent=128, hidden=128, 3-layer MLPs, SiLU, N_RECURSIONS=6, AdamW lr=1e-3, batch=64 → val_reward +1.8103
+
+See `paper_comparison.md` for full analysis and `experiments/benchmark_epochs.json` for raw benchmark data.
 
 ---
 

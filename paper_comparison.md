@@ -146,16 +146,35 @@ We currently backpropagate through all 6 recursion steps, which could cause grad
 
 ---
 
-## 8. Recommended Experiments (Priority Order)
+## 8. Experiment Results Summary
 
-1. **Add deep supervision loop** — N_sup outer steps with detached z, computing loss at each step. Expected: largest single improvement.
+### Time-budget experiments (original)
 
-2. **Implement 1-step gradient approximation** — run N-1 inner recursions under `no_grad()`, only gradient through the last one. Expected: enables higher N without instability.
+| # | Experiment | val_reward | Epochs | Notes |
+|---|---|---|---|---|
+| 3 | Baseline (latent=64, hidden=128, 2-layer) | +1.4510 | 442 | Original config |
+| 4 | Latent dim 128 (3-layer) | **+1.8103** | 435 | **Best** — low std (0.006) |
+| 5 | 3-layer MLPs (latent=128) | +1.6027 | 316 | High std (0.365) |
+| 6 | Deep supervision N_sup=4, 1-step grad | +1.2953 | 156 | Unstable (loss spikes) |
+| 7 | Deep supervision N_sup=4, avg loss | +1.5705 | 151 | Slower training |
+| 8 | Deep supervision N_sup=2, avg loss | +1.5071 | 271 | Still slower |
+| 9 | Deep supervision N_sup=4, lr=2e-3 | +1.4165 | 188 | Higher LR doesn't help |
+| 10 | Deep supervision N_sup=4, full BPTT | +1.5240 | 128 | No improvement |
 
-3. **Add ACT continue loss** — complete the adaptive computation time mechanism. Expected: better per-input efficiency.
+### Fair epoch benchmark (same epochs, 100 each)
 
-4. **Add EMA weights** — exponential moving average for evaluation. Expected: more stable val_reward.
+| Config | val_reward | Time | Notes |
+|---|---|---|---|
+| **baseline (N_sup=1)** | **+1.7914** | 243s | **Best** |
+| deep_sup_2 | +1.5695 | 449s | Worse + 1.8x slower |
+| deep_sup_4 | +1.6498 | 826s | Worse + 3.4x slower |
 
-5. **Reduce to 2-layer MLPs** — match the paper's architecture exactly. Expected: may reduce overfitting.
+**Key finding**: Deep supervision consistently underperforms on this task, even when controlling for epoch count. The paper's deep supervision works because ARC-AGI puzzles need iterative reasoning refinement. Pass ordering is a more direct mapping task — the summed losses across supervision steps create noisier gradients, and detached z prevents learning a coherent reasoning trajectory.
 
-6. **Try single shared network** — use one MLP for both net_z and net_y. Expected: fewer parameters, potentially better generalization.
+## 9. Recommended Experiments (Priority Order)
+
+1. **Increase latent dim to 256** — Already have latent=128 as best. Push further.
+2. **Try GELU activation** — Alternative to SiLU.
+3. **Add layer normalization** — Better training stability.
+4. **Try learning rate scheduling** — Warmup + cosine decay.
+5. **Data augmentation** — Noise on observations during training.

@@ -96,12 +96,24 @@ Each experiment produces a line in `experiments/results.jsonl`:
 
 | Experiment | val_reward | Changes |
 |---|---|---|
-| Baseline (default) | TBD | Original configuration |
+| Baseline (default) | +1.4510 | Original configuration |
+| **#4 (latent=128, 3-layer)** | **+1.8103** | Latent dim 64→128, 3-layer MLPs |
+
+### Fair Benchmark Results (100 epochs each, same conditions)
+
+| Config | val_reward | Time | Notes |
+|---|---|---|---|
+| **baseline (N_sup=1)** | **+1.7914** | 243s | **Best** |
+| deep_sup_2 | +1.5695 | 449s | Worse + 1.8x slower |
+| deep_sup_4 | +1.6498 | 826s | Worse + 3.4x slower |
+
+**Key finding:** Deep supervision consistently underperforms, even at equal epochs. Pass ordering is a direct mapping task — it benefits more from clean single-step gradients than progressive supervision. Do NOT pursue deep supervision further.
 
 ## Notes
 
-- The TRM paper uses 2-layer networks with dual latents — deviations may or may not help
+- The TRM paper uses 2-layer networks with dual latents — our best uses 3-layer MLPs
 - The compiler pass ordering task has 37 possible passes and 18 benchmarks
 - Training data is generated from synthetic compiler traces (random + greedy strategies)
-- The model has ~60K parameters in the baseline configuration
+- The model has ~137K parameters in the current best configuration
 - Lower validation loss during training doesn't always mean higher evaluation reward
+- **Deep supervision is empirically worse for this task** — see `paper_comparison.md` for full analysis
