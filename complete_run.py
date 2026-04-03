@@ -33,6 +33,12 @@ def setup_environment():
     if result.returncode != 0:
         print(f"compiler_gym install warning: {result.stderr.decode()[:300] if result.stderr else 'unknown'}")
     
+    # CRITICAL: Downgrade protobuf to fix compiler_gym compatibility
+    # Must be done AFTER compiler_gym install to override its dependencies
+    # See: https://developers.google.com/protocol-buffers/docs/news/2022-05-06
+    print("Fixing protobuf for compiler_gym compatibility...")
+    subprocess.run([sys.executable, "-m", "pip", "install", "protobuf>=3.20.0,<4.0.0", "--force-reinstall", "-q"], capture_output=True)
+    
     os.environ["OMP_NUM_THREADS"] = "1"
     os.environ["COMPILER_GYM_HOME"] = "/content/compiler_gym"
     if PROJECT_DIR not in sys.path:
@@ -48,6 +54,7 @@ def verify_compiler_gym():
     
     os.environ["OMP_NUM_THREADS"] = "1"
     os.environ["COMPILER_GYM_HOME"] = "/content/compiler_gym"
+    os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
     
     try:
         import compiler_gym
@@ -86,6 +93,7 @@ def train_and_benchmark(use_synthetic=True):
     os.environ["OMP_NUM_THREADS"] = "1"
     os.environ["COMPILER_GYM_HOME"] = "/content/compiler_gym"
     os.environ["CUDA_VISIBLE_DEVICES"] = ""
+    os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
     
     # Build args
     sys.argv = [
