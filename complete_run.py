@@ -40,9 +40,9 @@ def setup_environment():
     subprocess.run([sys.executable, "-m", "pip", "install", "protobuf>=3.20.0,<4.0.0", "--force-reinstall", "-q"], capture_output=True)
     
     # CRITICAL: Downgrade pydantic to fix compiler_gym compatibility
-    # compiler_gym uses deprecated `regex` parameter (removed in pydantic 2.5+)
+    # compiler_gym uses deprecated `regex` parameter (removed in pydantic 2.4+)
     print("Fixing pydantic for compiler_gym compatibility...")
-    subprocess.run([sys.executable, "-m", "pip", "install", "pydantic>=2.0,<2.5", "--force-reinstall", "-q"], capture_output=True)
+    subprocess.run([sys.executable, "-m", "pip", "install", "pydantic>=2.0,<2.3", "--force-reinstall", "-q"], capture_output=True)
     
     os.environ["OMP_NUM_THREADS"] = "1"
     os.environ["COMPILER_GYM_HOME"] = "/content/compiler_gym"
