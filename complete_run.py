@@ -45,17 +45,11 @@ def setup_environment():
     subprocess.run([sys.executable, "-m", "pip", "uninstall", "pydantic", "-y", "-q"], capture_output=True)
     subprocess.run([sys.executable, "-m", "pip", "install", "pydantic==1.10.15", "-q"], capture_output=True)
 
-    # Patch compiler_gym to replace deprecated `regex` with `pattern`
-    import site
-    site_packages = site.getsitepackages()[0]
-    compiler_gym_env_state = os.path.join(site_packages, "compiler_gym", "compiler_env_state.py")
-    if os.path.exists(compiler_gym_env_state):
-        print("Patching compiler_gym to fix deprecated regex parameter...")
-        with open(compiler_gym_env_state, "r") as f:
-            content = f.read()
-        content = content.replace("regex=", "pattern=")
-        with open(compiler_gym_env_state, "w") as f:
-            f.write(content)
+    # Install compiler_gym binaries
+    print("Installing compiler_gym binaries...")
+    subprocess.run([sys.executable, "-c", 
+        "import compiler_gym; compiler_gym.install(prefix='/content/compiler_gym')"], 
+        capture_output=True)
     
     os.environ["OMP_NUM_THREADS"] = "1"
     os.environ["COMPILER_GYM_HOME"] = "/content/compiler_gym"
