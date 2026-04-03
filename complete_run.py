@@ -39,6 +39,11 @@ def setup_environment():
     print("Fixing protobuf for compiler_gym compatibility...")
     subprocess.run([sys.executable, "-m", "pip", "install", "protobuf>=3.20.0,<4.0.0", "--force-reinstall", "-q"], capture_output=True)
     
+    # CRITICAL: Downgrade pydantic to fix compiler_gym compatibility
+    # compiler_gym uses deprecated `regex` parameter
+    print("Fixing pydantic for compiler_gym compatibility...")
+    subprocess.run([sys.executable, "-m", "pip", "install", "pydantic>=2.0,<2.7", "-q"], capture_output=True)
+    
     os.environ["OMP_NUM_THREADS"] = "1"
     os.environ["COMPILER_GYM_HOME"] = "/content/compiler_gym"
     if PROJECT_DIR not in sys.path:
