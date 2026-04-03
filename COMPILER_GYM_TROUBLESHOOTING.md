@@ -1,34 +1,28 @@
-# CompilerGym Colab Issues - SOLVED
+# TRM Compiler Pipeline - Current Approach
 
-## The Problem
-CompilerGym has dependency hell:
-- pydantic v2 incompatible (regex deprecated)
-- LLVM service binary missing in Colab
+## Latest: Direct LLVM Integration
 
-## BEST SOLUTION: Use Docker with MLIR-RL
+Instead of CompilerGym dependency hell, use direct LLVM calls:
+- `opt` to apply optimization passes
+- Get real instruction counts from compiled output
+- No service binary required
 
-There's a working approach using MLIR-RL-artifact that has:
-- Pre-built Docker container with LLVM/MLIR
-- Real compiler feedback (no synthetic)
-- No dependency issues
+## How It Works
+1. Environment has LLVM/Clang installed (system or conda)
+2. `CompilerEnv` uses subprocess to call `opt` with passes
+3. Real feedback from actual compilation
 
-See: https://github.com/mohph197/MLIR-RL-artifact
-
-### Quick Docker setup:
-```bash
-docker build -t mlir-rl-artifact .
-docker run -it mlir-rl-artifact
-```
-
-## What We Tried (failed)
-- Patching compiler_gym regex → pattern
-- Downgrading pydantic to v1
-- Force reinstalling protobuf
-- compiler_gym.install() in setup
-
-## If Still Want CompilerGym (not recommended)
-Try on a real VM instead of Colab, or use pre-built Colab with LLVM.
+## Setup Requirements
+- LLVM/Clang installed: `conda install -c conda-forge clang=21`
+- Or use MLIR-RL Docker container for pre-built environment
 
 ## Files
-- `complete_run.py` - main training script
+- `complete_run.py` - main training script  
 - `TRM_Colab.ipynb` - Colab notebook
+- `trm_compiler_real_llvm.py` - TRM model and environment
+
+## Legacy (DEPRECATED)
+CompilerGym approach caused:
+- pydantic v2 regex deprecated error
+- LLVM service binary missing (returncode 127)
+- Colab environment issues
