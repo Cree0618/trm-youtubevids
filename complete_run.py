@@ -42,7 +42,7 @@ def setup_environment():
     # CRITICAL: Downgrade pydantic to fix compiler_gym compatibility
     # compiler_gym uses deprecated `regex` parameter
     print("Fixing pydantic for compiler_gym compatibility...")
-    subprocess.run([sys.executable, "-m", "pip", "install", "pydantic>=2.0,<2.7", "-q"], capture_output=True)
+    subprocess.run([sys.executable, "-m", "pip", "install", "pydantic>=2.0,<2.6", "--force-reinstall", "-q"], capture_output=True)
     
     os.environ["OMP_NUM_THREADS"] = "1"
     os.environ["COMPILER_GYM_HOME"] = "/content/compiler_gym"
