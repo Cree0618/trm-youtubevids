@@ -45,17 +45,46 @@ def setup_environment():
     subprocess.run([sys.executable, "-m", "pip", "uninstall", "pydantic", "-y", "-q"], capture_output=True)
     subprocess.run([sys.executable, "-m", "pip", "install", "pydantic==1.10.15", "-q"], capture_output=True)
 
-    # Install compiler_gym binaries
-    print("Installing compiler_gym binaries...")
-    subprocess.run([sys.executable, "-c", 
-        "import compiler_gym; compiler_gym.install(prefix='/content/compiler_gym')"], 
-        capture_output=True)
+    # Install LLVM for direct LLVM mode
+    print("Installing LLVM for direct LLVM integration...")
+    subprocess.run(["apt-get", "update"], capture_output=True)
+    subprocess.run(["apt-get", "install", "-y", "llvm", "clang"], capture_output=True)
     
     os.environ["OMP_NUM_THREADS"] = "1"
     os.environ["COMPILER_GYM_HOME"] = "/content/compiler_gym"
     if PROJECT_DIR not in sys.path:
         sys.path.insert(0, PROJECT_DIR)
     print(f"PROJECT_DIR={PROJECT_DIR}")
+
+
+def verify_direct_llvm():
+    """Verify direct LLVM (opt/clang) works."""
+    print("=" * 60)
+    print("STEP 2: Verifying Direct LLVM")
+    print("=" * 60)
+    
+    import subprocess
+    try:
+        result = subprocess.run(["opt", "--version"], capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError("opt not found")
+        print(f"opt version: {result.stdout.split()[2]}")
+        
+        result = subprocess.run(["clang", "--version"], capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError("clang not found")
+        print(f"clang version: {result.stdout.split()[2]}")
+        
+        print("Direct LLVM OK!")
+        return True
+    except FileNotFoundError as e:
+        print(f"LLVM tools not found: {e}")
+        print("Will use synthetic mode")
+        return False
+    except Exception as e:
+        print(f"Direct LLVM error: {e}")
+        print("Will use synthetic mode")
+        return False
 
 
 def verify_compiler_gym():
@@ -96,7 +125,7 @@ def verify_compiler_gym():
         return False
 
 
-def train_and_benchmark(use_synthetic=True):
+def train_and_benchmark(use_synthetic=True, use_direct_llvm=False):
     """Train TRM and benchmark."""
     print("=" * 60)
     print("STEP 4: Training TRM + Benchmarking")
@@ -119,7 +148,9 @@ def train_and_benchmark(use_synthetic=True):
         "--seed", "42"
     ]
     
-    # Add synthetic flag if needed
+    # Add flags
+    if use_direct_llvm:
+        sys.argv.append("--direct-llvm")
     if use_synthetic:
         sys.argv.append("--synthetic")
     
@@ -132,11 +163,11 @@ def train_and_benchmark(use_synthetic=True):
 def main():
     setup_environment()
     
-    # Check if CompilerGym works
-    cg_ok = verify_compiler_gym()
+    # Try direct LLVM first, fall back to synthetic
+    llvm_ok = verify_direct_llvm()
     
-    # Train (use synthetic mode if CompilerGym failed)
-    train_and_benchmark(use_synthetic=not cg_ok)
+    # Train (use direct LLVM or synthetic)
+    train_and_benchmark(use_direct_llvm=llvm_ok, use_synthetic=not llvm_ok)
     
     print("=" * 60)
     print("DONE!")
