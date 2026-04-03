@@ -14,7 +14,10 @@ import argparse
 import math
 import os
 import random
+import re
+import subprocess
 import sys
+import tempfile
 import time
 
 import numpy as np
@@ -83,18 +86,241 @@ DEFAULT_BENCHMARKS = [
     "tiff2bw", "tiff2rgba", "tiffdither", "tiffmedian",
 ]
 
+
 # ═══════════════════════════════════════════════════════════════
-# 2. COMPILERGYM WRAPPER
+# 2. DIRECT LLVM INTEGRATION
+# ═══════════════════════════════════════════════════════════════
+
+def find_llvm_tool(name: str) -> str:
+    """Find LLVM tool in common locations."""
+    tools = [
+        f"/usr/bin/{name}",
+        f"/usr/local/bin/{name}",
+        f"/opt/llvm/bin/{name}",
+        os.path.expanduser(f"~/llvm/build/bin/{name}"),
+    ]
+    for tool in tools:
+        if os.path.exists(tool):
+            return tool
+    result = subprocess.run(["which", name], capture_output=True, text=True)
+    if result.returncode == 0:
+        return result.stdout.strip()
+    return name
+
+
+class DirectLLVMEnv:
+    """Direct LLVM environment using opt/clang subprocess calls."""
+
+    def __init__(self, benchmark_id: str, llvm_bc_path: str = None, seed: int = 42):
+        self.benchmark_id = benchmark_id
+        self.llvm_bc_path = llvm_bc_path
+        self.seed = seed
+        self._opt = find_llvm_tool("opt")
+        self._llvm_dis = find_llvm_tool("llvm-dis")
+        self._temp_dir = None
+        self._initial_inst = 0
+        self._current_inst = 0
+        self._applied_passes: list[str] = []
+        self._current_bc = None
+
+    def open(self):
+        self._temp_dir = tempfile.mkdtemp(prefix="trm_llvm_")
+        if self.llvm_bc_path and os.path.exists(self.llvm_bc_path):
+            self._current_bc = self.llvm_bc_path
+        else:
+            self._current_bc = self._create_sample_bc()
+
+    def close(self):
+        if self._temp_dir and os.path.exists(self._temp_dir):
+            import shutil
+            shutil.rmtree(self._temp_dir)
+        self._temp_dir = None
+        self._current_bc = None
+
+    def __enter__(self):
+        self.open()
+        return self
+
+    def __exit__(self, *a):
+        self.close()
+
+    def _create_sample_bc(self) -> str:
+        """Create a sample bitcode file from C code."""
+        sample_c = """
+int sum_array(int n, int *arr) {
+    int sum = 0;
+    for (int i = 0; i < n; i++) {
+        sum += arr[i];
+    }
+    return sum;
+}
+
+int fibonacci(int n) {
+    if (n <= 1) return n;
+    return fibonacci(n - 1) + fibonacci(n - 2);
+}
+
+void memcpy_pattern(char *dst, char *src, int size) {
+    for (int i = 0; i < size; i++) {
+        dst[i] = src[i];
+    }
+}
+"""
+        c_path = os.path.join(self._temp_dir, "sample.c")
+        bc_path = os.path.join(self._temp_dir, "sample.bc")
+
+        with open(c_path, "w") as f:
+            f.write(sample_c)
+
+        clang = find_llvm_tool("clang")
+        result = subprocess.run(
+            [clang, "-O0", "-c", "-emit-llvm", "-o", bc_path, c_path],
+            capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"Failed to compile sample: {result.stderr}")
+
+        return bc_path
+
+    def _run_opt(self, pass_name: str, input_bc: str) -> tuple[str, int]:
+        """Run opt with a single pass and return output BC + instruction count."""
+        output_bc = os.path.join(self._temp_dir, f"opt_{pass_name}.bc")
+
+        result = subprocess.run(
+            [self._opt, f"-{pass_name}", input_bc, "-o", output_bc],
+            capture_output=True, text=True
+        )
+
+        if result.returncode != 0:
+            raise RuntimeError(f"opt -{pass_name} failed: {result.stderr}")
+
+        inst_count = self._count_instructions(output_bc)
+        return output_bc, inst_count
+
+    def _count_instructions(self, bc_path: str) -> int:
+        """Count instructions in bitcode using opt."""
+        result = subprocess.run(
+            [self._opt, "--print-after-all", bc_path],
+            capture_output=True, text=True
+        )
+
+        if result.returncode != 0:
+            return 0
+
+        lines = result.stdout.split("\n")
+        count = 0
+        for line in lines:
+            line = line.strip()
+            if line.startswith(";") or not line:
+                continue
+            count += 1
+
+        return max(count, 1)
+
+    def _extract_autophase_features(self, bc_path: str) -> np.ndarray:
+        """Extract Autophase-style features from bitcode."""
+        opt_path = find_llvm_tool("opt")
+
+        result = subprocess.run(
+            [opt_path, "--print-after-all", bc_path],
+            capture_output=True, text=True
+        )
+
+        features = np.zeros(56, dtype=np.float32)
+
+        if result.returncode == 0:
+            lines = result.stdout.split("\n")
+            func_counts = {}
+            current_func = None
+            inst_count = 0
+
+            for line in lines:
+                if line.startswith("define "):
+                    if current_func and inst_count > 0:
+                        func_counts[current_func] = inst_count
+                    match = re.search(r'@(\w+)', line)
+                    current_func = match.group(1) if match else "unknown"
+                    inst_count = 0
+                elif line.strip().startswith(";"):
+                    continue
+                elif line.strip() and not line.startswith(" " * 4):
+                    if current_func:
+                        func_counts[current_func] = inst_count
+                        current_func = None
+                    inst_count = 0
+                else:
+                    inst_count += 1
+
+            if current_func and inst_count > 0:
+                func_counts[current_func] = inst_count
+
+            feature_idx = 0
+            for i, (fname, icount) in enumerate(list(func_counts.items())[:8]):
+                if feature_idx < 56:
+                    features[feature_idx] = icount
+                    feature_idx += 1
+                if feature_idx < 56:
+                    features[feature_idx] = icount / max(sum(func_counts.values()), 1)
+                    feature_idx += 1
+
+        return features
+
+    def reset(self) -> tuple[np.ndarray, int]:
+        self._applied_passes = []
+        self._initial_inst = self._count_instructions(self._current_bc)
+        self._current_inst = self._initial_inst
+        obs = self._extract_autophase_features(self._current_bc)
+        return obs, self._initial_inst
+
+    def step(self, pass_id: int) -> tuple[np.ndarray, list[float], bool, dict]:
+        pname = USEFUL_PASSES[pass_id]
+        prev_inst = self._current_inst
+
+        try:
+            self._current_bc, self._current_inst = self._run_opt(pname, self._current_bc)
+            compiled = True
+        except Exception:
+            compiled = False
+            self._current_inst = prev_inst
+
+        obs = self._extract_autophase_features(self._current_bc)
+
+        if prev_inst > 0 and self._current_inst > 0:
+            reward = math.log(prev_inst / max(self._current_inst, 1))
+        else:
+            reward = 0.0
+
+        self._applied_passes.append(pname)
+        self._step = len(self._applied_passes)
+
+        feedback = [
+            float(self._current_inst) / 10000.0,
+            self._current_inst / max(prev_inst, 1),
+            float(compiled),
+            reward,
+        ]
+        info = {"pass_name": pname, "current_inst": self._current_inst,
+                "initial_inst": self._initial_inst, "step": self._step}
+
+        return obs, feedback, False, info
+
+
+# ═══════════════════════════════════════════════════════════════
+# 3. COMPILERGYM WRAPPER
 # ═══════════════════════════════════════════════════════════════
 
 class CompilerEnv:
-    """Thin wrapper: uniform API over CompilerGym and synthetic env."""
+    """Thin wrapper: uniform API over CompilerGym, DirectLLVM and synthetic env."""
 
-    def __init__(self, benchmark_id: str, use_compilergym: bool = False, seed: int = 42):
+    def __init__(self, benchmark_id: str, use_compilergym: bool = False, 
+                 use_direct_llvm: bool = False, llvm_bc_path: str = None, seed: int = 42):
         self.benchmark_id = benchmark_id
         self.use_compilergym = use_compilergym
+        self.use_direct_llvm = use_direct_llvm
+        self.llvm_bc_path = llvm_bc_path
         self.seed = seed
         self._cg = None
+        self._llvm = None
         self._syn = None
         self._action_map: dict[int, int] = {}
         self._initial_inst = 0
@@ -109,7 +335,10 @@ class CompilerEnv:
         return USEFUL_PASSES[pid]
 
     def open(self):
-        if self.use_compilergym:
+        if self.use_direct_llvm:
+            self._llvm = DirectLLVMEnv(self.benchmark_id, self.llvm_bc_path, self.seed)
+            self._llvm.open()
+        elif self.use_compilergym:
             import compiler_gym
             full_id = self.benchmark_id if "/" in self.benchmark_id else f"cbench-v1/{self.benchmark_id}"
             self._cg = compiler_gym.make(
@@ -126,6 +355,9 @@ class CompilerEnv:
                     self._action_map[pid] = action_names.index(flag)
 
     def close(self):
+        if self._llvm is not None:
+            self._llvm.close()
+            self._llvm = None
         if self._cg is not None:
             self._cg.close()
             self._cg = None
@@ -144,7 +376,11 @@ class CompilerEnv:
         self._step = 0
         self._done = False
 
-        if self._cg is not None:
+        if self._llvm is not None:
+            obs, self._initial_inst = self._llvm.reset()
+            self._current_inst = self._initial_inst
+            return obs, self._initial_inst
+        elif self._cg is not None:
             self._cg.reset()
             self._initial_inst = int(self._cg.observation["IrInstructionCount"])
             self._current_inst = self._initial_inst
@@ -159,7 +395,12 @@ class CompilerEnv:
         pname = self._pass_id_to_name(pass_id)
         prev_inst = self._current_inst
 
-        if self._cg is not None:
+        if self._llvm is not None:
+            obs, feedback, done, info = self._llvm.step(pass_id)
+            self._current_inst = info.get("current_inst", prev_inst)
+            self._done = done
+            return obs, feedback, done, info
+        elif self._cg is not None:
             if pass_id not in self._action_map:
                 return self._compilergym_obs(), [0.0, 1.0, 0.0, 0.0], True, {"err": "unmapped"}
             try:
@@ -415,13 +656,14 @@ class TraceDataset(Dataset):
                 "pass_id": pid, "reward": rew}
 
 
-def generate_traces(benchmarks, episodes, max_steps, use_cg, seed=42):
-    """Generate training traces from CompilerGym (or synthetic fallback)."""
+def generate_traces(benchmarks, episodes, max_steps, use_cg, use_direct_llvm=False, llvm_bc_path=None, seed=42):
+    """Generate training traces from CompilerGym/DirectLLVM (or synthetic fallback)."""
     records = []
     rng = random.Random(seed)
     for bench in benchmarks:
         for ep in range(episodes):
-            env = CompilerEnv(bench, use_compilergym=use_cg, seed=seed + ep)
+            env = CompilerEnv(bench, use_compilergym=use_cg, use_direct_llvm=use_direct_llvm, 
+                              llvm_bc_path=llvm_bc_path, seed=seed + ep)
             try:
                 env.open()
                 obs, init_inst = env.reset()
@@ -432,7 +674,7 @@ def generate_traces(benchmarks, episodes, max_steps, use_cg, seed=42):
                         best_pid, best_r = rng.randint(0, NUM_PASSES - 1), float("-inf")
                         for _ in range(min(8, NUM_PASSES)):
                             cand = rng.randint(0, NUM_PASSES - 1)
-                            te = CompilerEnv(bench, use_compilergym=False, seed=seed + step + cand)
+                            te = CompilerEnv(bench, use_compilergym=False, use_direct_llvm=False, seed=seed + step + cand)
                             te.open()
                             te.reset()
                             for p in applied:
@@ -593,12 +835,13 @@ def _run_trm(model, env, max_steps, device, closed_loop=True, temperature=0.8):
         return total_r, env.current_inst_count, env.initial_inst_count
 
 
-def bench_single(bench_id, model, max_steps, device, use_cg, seed, num_random):
+def bench_single(bench_id, model, max_steps, device, use_cg, use_direct_llvm, llvm_bc_path, seed, num_random):
     """Run all algorithms on one benchmark. Returns dict of results."""
     results = {}
 
     # LLVM -Oz
-    env = CompilerEnv(bench_id, use_compilergym=use_cg, seed=seed)
+    env = CompilerEnv(bench_id, use_compilergym=use_cg, use_direct_llvm=use_direct_llvm, 
+                      llvm_bc_path=llvm_bc_path, seed=seed)
     try:
         env.open()
         r, fi, ii = _run_fixed_pipeline(env, OZ_PIPELINE, max_steps)
@@ -608,7 +851,8 @@ def bench_single(bench_id, model, max_steps, device, use_cg, seed, num_random):
         env.close()
 
     # LLVM -O3
-    env = CompilerEnv(bench_id, use_compilergym=use_cg, seed=seed)
+    env = CompilerEnv(bench_id, use_compilergym=use_cg, use_direct_llvm=use_direct_llvm,
+                      llvm_bc_path=llvm_bc_path, seed=seed)
     try:
         env.open()
         r, fi, ii = _run_fixed_pipeline(env, O3_PIPELINE, max_steps)
@@ -618,7 +862,8 @@ def bench_single(bench_id, model, max_steps, device, use_cg, seed, num_random):
         env.close()
 
     # Random search
-    env = CompilerEnv(bench_id, use_compilergym=use_cg, seed=seed)
+    env = CompilerEnv(bench_id, use_compilergym=use_cg, use_direct_llvm=use_direct_llvm,
+                      llvm_bc_path=llvm_bc_path, seed=seed)
     try:
         env.open()
         r, fi, ii = _run_random(env, max_steps, num_random, seed)
@@ -630,7 +875,8 @@ def bench_single(bench_id, model, max_steps, device, use_cg, seed, num_random):
     if model is not None:
         model.eval()
         # TRM closed-loop
-        env = CompilerEnv(bench_id, use_compilergym=use_cg, seed=seed)
+        env = CompilerEnv(bench_id, use_compilergym=use_cg, use_direct_llvm=use_direct_llvm,
+                          llvm_bc_path=llvm_bc_path, seed=seed)
         try:
             env.open()
             r, fi, ii = _run_trm(model, env, max_steps, device, closed_loop=True)
@@ -640,7 +886,8 @@ def bench_single(bench_id, model, max_steps, device, use_cg, seed, num_random):
             env.close()
 
         # TRM blind
-        env = CompilerEnv(bench_id, use_compilergym=use_cg, seed=seed)
+        env = CompilerEnv(bench_id, use_compilergym=use_cg, use_direct_llvm=use_direct_llvm,
+                          llvm_bc_path=llvm_bc_path, seed=seed)
         try:
             env.open()
             r, fi, ii = _run_trm(model, env, max_steps, device, closed_loop=False)
@@ -719,6 +966,10 @@ def main():
     parser.add_argument("--output-dir", type=str, default="trm_output")
     parser.add_argument("--synthetic", action="store_true",
                         help="Use synthetic env (no CompilerGym)")
+    parser.add_argument("--direct-llvm", action="store_true",
+                        help="Use direct LLVM (opt/clang) instead of CompilerGym")
+    parser.add_argument("--llvm-bc-path", type=str, default=None,
+                        help="Path to LLVM bitcode file for direct LLVM mode")
     parser.add_argument("--eval-only", action="store_true",
                         help="Skip training, just benchmark existing checkpoint")
     args = parser.parse_args()
@@ -727,8 +978,23 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     ckpt_path = os.path.join(args.output_dir, "trm_model.pt")
 
-    use_cg = not args.synthetic
-    if use_cg:
+    use_direct_llvm = args.direct_llvm
+    use_cg = not args.synthetic and not use_direct_llvm
+    
+    if use_direct_llvm:
+        print(f"[ok] Using direct LLVM integration")
+        try:
+            opt_check = subprocess.run(["opt", "--version"], capture_output=True)
+            if opt_check.returncode != 0:
+                raise RuntimeError("opt not found")
+            print(f"[ok] LLVM tools available")
+        except Exception as e:
+            print(f"[warn] LLVM not available: {e}")
+            print("[warn] falling back to --synthetic")
+            use_direct_llvm = False
+            use_cg = True
+    
+    if use_cg and not use_direct_llvm:
         try:
             import compiler_gym
             print(f"[ok] compiler_gym {compiler_gym.__version__}")
@@ -741,7 +1007,7 @@ def main():
             print("[warn] falling back to --synthetic")
             use_cg = False
 
-    print(f"Device: {device}  |  CompilerGym: {use_cg}  |  "
+    print(f"Device: {device}  |  DirectLLVM: {use_direct_llvm}  |  CompilerGym: {use_cg}  |  "
           f"Benchmarks: {args.benchmarks}")
 
     # ---- Phase 1: Generate traces ----
@@ -752,7 +1018,8 @@ def main():
         t0 = time.time()
         records = generate_traces(
             args.benchmarks, args.episodes, args.max_steps,
-            use_cg=use_cg, seed=args.seed,
+            use_cg=use_cg, use_direct_llvm=use_direct_llvm, 
+            llvm_bc_path=args.llvm_bc_path, seed=args.seed,
         )
         print(f"  {len(records)} records from {len(args.benchmarks)} benchmarks "
               f"in {time.time()-t0:.1f}s")
@@ -790,7 +1057,8 @@ def main():
     for bench_id in args.benchmarks:
         print(f"\n  --- {bench_id} ---")
         r = bench_single(bench_id, model, args.max_steps, device,
-                         use_cg=use_cg, seed=args.seed, num_random=args.num_random)
+                         use_cg=use_cg, use_direct_llvm=use_direct_llvm, 
+                         llvm_bc_path=args.llvm_bc_path, seed=args.seed, num_random=args.num_random)
         for algo, v in r.items():
             print(f"    {algo:<14s}  reward={v['reward']:+8.4f}  "
                   f"reduction={v['reduction']*100:5.1f}%  final_inst={v['final']}")
