@@ -2,3 +2,7 @@ __pycache__/
 media/
 tmp_frames/
 *.log
+data/
+experiments/
+trm_output*/
+*.pt

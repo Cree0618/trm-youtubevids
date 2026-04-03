@@ -10,6 +10,52 @@ maintained Gym-style environment API for extensions or wrappers, use
 
 ---
 
+## Autoresearch — Autonomous AI-Driven Experimentation
+
+Inspired by [karpathy/autoresearch](https://github.com/karpathy/autoresearch), this project supports autonomous overnight experimentation. An AI agent modifies `train.py`, runs experiments with a fixed time budget, evaluates results, and iterates — all without human intervention.
+
+### How It Works
+
+1. **`prepare.py`** — Fixed data preparation (generates training traces). Not modified by agents.
+2. **`train.py`** — The single file agents modify. Contains model, optimizer, loss, and training loop.
+3. **`program.md`** — Agent instructions. Humans edit this to guide research direction.
+4. **`run_experiment.py`** — Fixed experiment runner. Trains for 5 minutes, evaluates, logs results.
+
+### Quick Start for Autoresearch
+
+```bash
+# 1. Generate training data (one-time)
+python prepare.py
+
+# 2. Run a single experiment (~5 min training + eval)
+python run_experiment.py
+
+# 3. View experiment history
+python run_experiment.py --history
+```
+
+### Running Autonomous Research
+
+Give an AI agent (Claude, Codex, etc.) access to this repo and prompt:
+
+```
+Read program.md and run a new experiment!
+```
+
+**Important:** Instruct the agent **not to ask any questions** — the research loop runs autonomously (e.g., overnight while you sleep). Asking questions stops the loop. If unsure, the agent should make a reasonable assumption and continue.
+
+The agent will:
+1. Read `program.md` for research context
+2. Modify `train.py` (architecture, hyperparameters, etc.)
+3. Run `python run_experiment.py`
+4. Check if `val_reward` improved
+5. Keep or revert changes
+6. Repeat with new ideas
+
+Each experiment logs to `experiments/results.jsonl`. The best model is saved to `experiments/best_model/`.
+
+---
+
 ## Projects
 
 ### `trm_compiler/` — Compiler Pass Ordering (ACTIVE)
@@ -103,19 +149,28 @@ environments. The maintained dependency is `gymnasium`, not `gym`.
 
 ```
 trm-youtubevids/
-├── trm_compiler/              # Compiler pass ordering (active)
-│   ├── model.py               # TinyPassOrderingRefiner
-│   ├── env_wrapper.py         # SyntheticCompilerEnv + CompilerGym
-│   ├── data.py                # Trace generation
-│   ├── training.py            # Training loop
-│   ├── baselines.py           # Random/greedy baselines
-│   └── example.py             # CLI entry point
-├── trm_gemm/                  # GEMM kernel optimization
-│   ├── model.py               # TinyRecursiveGemmRefiner
-│   ├── backend.py             # Triton + heuristic backend
+├── train.py                 # Model + training loop (MODIFIED BY AGENT)
+├── prepare.py               # Data preparation (FIXED)
+├── run_experiment.py        # Experiment runner (FIXED)
+├── program.md               # Agent instructions (MODIFIED BY HUMAN)
+├── trm_compiler/            # Compiler pass ordering (active)
+│   ├── model.py             # TinyPassOrderingRefiner
+│   ├── env_wrapper.py       # SyntheticCompilerEnv + CompilerGym
+│   ├── data.py              # Trace generation
+│   ├── training.py          # Training loop
+│   ├── baselines.py         # Random/greedy baselines
+│   └── example.py           # CLI entry point
+├── trm_gemm/                # GEMM kernel optimization
+│   ├── model.py             # TinyRecursiveGemmRefiner
+│   ├── backend.py           # Triton + heuristic backend
 │   └── ...
-├── TRM_REVIEW.md              # Paper analysis
-├── TRM_NEW_APPLICATIONS.md    # Application designs
+├── experiments/             # Autoresearch results (auto-created)
+│   ├── results.jsonl        # Experiment log
+│   └── best_model/          # Best model + train.py
+├── data/                    # Training traces (auto-created)
+│   └── traces.json
+├── TRM_REVIEW.md            # Paper analysis
+├── TRM_NEW_APPLICATIONS.md  # Application designs
 ├── TRM_COMPILER_TOOLS_DATASETS.md  # Tools & benchmarks
 └── pyproject.toml
 ```
